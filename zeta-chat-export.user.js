@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.1.1
+// @version      1.1.2
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @description  제타 대화·상태창 불러오기, 선택 및 TXT/JSON 내보내기
@@ -15,7 +15,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.1.1';
+  const VERSION = '1.1.2';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -528,6 +528,8 @@
       #zce-panel *{box-sizing:border-box}
       #zce-panel button{background:#3b3b49;color:white;border:1px solid #696978;border-radius:7px;padding:8px 7px;font:600 12px system-ui;cursor:pointer;flex:1}
       #zce-panel button:disabled{opacity:.5}
+      #zce-panel button.zce-primary-action{background:#246443;border-color:#69d1a0;color:#fff}
+      #zce-panel button.zce-primary-action:active{background:#1e5238}
       #zce-panel button[data-on="true"]{background:#246443;border-color:#69d1a0}
       #zce-panel .zce-head{display:flex;align-items:center;gap:7px;cursor:grab;user-select:none;-webkit-user-select:none;min-height:30px}
       #zce-panel .zce-head button{flex:none}
@@ -544,8 +546,6 @@
       #zce-panel #zce-user-name.zce-name-empty{border:1px solid #52c58b;box-shadow:none}
       #zce-panel .zce-exclude-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 4px;color:#bdbdc9;font-size:11px}
       #zce-panel .zce-exclude-heading strong{flex:none;font-weight:700}
-      #zce-panel .zce-time-inline{display:flex;align-items:center;gap:4px;font-size:11px;color:#e0dfea;white-space:nowrap;cursor:pointer}
-      #zce-panel .zce-time-inline input{width:15px;height:15px;flex:none;margin:0;accent-color:#42b878}
       #zce-panel .zce-filter{display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:12px}
       #zce-panel .zce-filter input{width:17px;height:17px;flex:none;accent-color:#42b878}
       #zce-panel .zce-preview{max-height:290px;overflow:auto;border:1px solid #454550;border-radius:10px;padding:4px}
@@ -558,8 +558,8 @@
       #zce-panel .zce-card-actions .zce-more{flex:none;padding:3px 6px;font-size:11px}
       #zce-panel .zce-skip-tag{margin-right:auto;font-size:10px;color:#f6c680}
       #zce-panel .zce-note{color:#bdbdc9;font-size:11px;margin:6px 0}
-      #zce-panel .zce-user-label{display:block;font-size:12px;font-weight:600;margin-top:7px}
-      #zce-panel details{border-top:1px solid #54545b;border-bottom:1px solid #54545b;margin-top:10px;padding:7px 0}
+      #zce-panel .zce-user-label{display:block;font-size:12px;font-weight:600;margin-top:16px}
+      #zce-panel details{border-top:1px solid #54545b;border-bottom:1px solid #54545b;margin-top:18px;padding:7px 0}
       #zce-panel summary{cursor:pointer;font-weight:700}
       #zce-panel .zce-size-control{margin:9px 0}
       #zce-panel .zce-size-control input[type="range"]{display:block;width:100%;margin-top:6px;accent-color:#52c58b}
@@ -579,7 +579,7 @@
         <div class="zce-summary-card"><span class="zce-summary-label">수집한 대화</span><strong class="zce-summary-number" id="zce-collected-count">0</strong></div>
         <div class="zce-summary-card zce-summary-selected"><span class="zce-summary-label">선택한 대화</span><strong class="zce-summary-number" id="zce-selected-count">0</strong></div>
       </div>
-      <div class="zce-row"><button id="zce-load" data-act="load">과거 대화 불러오기</button><button id="zce-stop" data-act="stop">중지</button></div>
+      <div class="zce-row"><button id="zce-load" class="zce-primary-action" data-act="load">과거 대화 불러오기</button><button id="zce-stop" data-act="stop">중지</button></div>
       <div class="zce-note">제타 채팅방에서 과거 대화와 상태창을 함께 불러옵니다. 상태창이 없는 방에서도 그대로 작동합니다. 번호는 오래된 순서부터 매겨집니다.</div>
       <div class="zce-row"><button data-act="recent" data-n="5">최근 5</button><button data-act="recent" data-n="10">최근 10</button><button data-act="recent" data-n="50">최근 50</button><button data-act="recent" data-n="100">최근 100</button></div>
       <div class="zce-row"><button data-act="all">전체 선택</button><button data-act="clear">선택 해제</button></div>
@@ -589,15 +589,16 @@
       <div class="zce-note" id="zce-list-note"></div>
       <div class="zce-preview" id="zce-list" hidden></div>
       <div class="zce-row"><button data-act="more-older" id="zce-more-older" hidden>이전 대화 40개 더 표시</button></div>
-      <div class="zce-exclude-heading"><strong>저장 시 제외할 내용</strong><label class="zce-time-inline"><input type="checkbox" id="zce-remove-time" checked> 날짜/시간 제거 (TXT)</label></div>
+      <div class="zce-exclude-heading"><strong>저장 시 제외할 내용</strong></div>
       <label class="zce-filter"><input type="checkbox" id="zce-remove-ooc" checked> <b>OOC: 포함 메시지 전체 제외</b></label>
       <label class="zce-filter"><input type="checkbox" id="zce-remove-summary" checked> <b>「요약」 포함 메시지 전체 제외</b></label>
       <label class="zce-filter"><input type="checkbox" id="zce-remove-info"> 상태창 제외</label>
       <label class="zce-filter"><input type="checkbox" id="zce-remove-code"> 일반 코드블록 제외</label>
+      <label class="zce-filter"><input type="checkbox" id="zce-remove-time" checked> 날짜/시간 제거 (TXT)</label>
       <label class="zce-user-label" for="zce-user-name">사용자 이름 <span class="zce-note">(비워두면 사용자)</span></label>
       <input id="zce-user-name" class="zce-name-empty" type="text" placeholder="사용자" maxlength="60" autocomplete="off" style="width:100%;margin:5px 0 8px">
       <div style="margin-top:10px">파일명 <input id="zce-name" value="제타_대화" style="width:100%"></div>
-      <div class="zce-row"><button data-act="txt">TXT 저장</button><button data-act="json">JSON 저장</button></div>
+      <div class="zce-row"><button class="zce-primary-action" data-act="txt">TXT 저장</button><button class="zce-primary-action" data-act="json">JSON 저장</button></div>
       <details id="zce-ui-settings"><summary>창·버튼 위치 및 크기 설정</summary>
         <div class="zce-note">버튼은 직접 드래그해 옮길 수 있고, 이 창은 상단 제목 영역을 드래그하면 이동합니다. 설정은 브라우저에 저장됩니다.</div>
         <div class="zce-size-control"><label for="zce-button-size">버튼 크기: <span id="zce-button-size-label">100%</span></label><input id="zce-button-size" type="range" min="60" max="160" step="10" value="100"></div>
