@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.0.0
+// @version      1.1.0
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @description  제타 대화·상태창 불러오기, 선택 및 TXT/JSON 내보내기
@@ -15,7 +15,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -445,7 +445,8 @@
   function update(){
     if(!panel)return;
     status.textContent=info;
-    summary.textContent=`수집 ${messages.length}개 / 선택 ${chosen.size}개`;
+    summary.querySelector('#zce-collected-count').textContent=String(messages.length);
+    summary.querySelector('#zce-selected-count').textContent=String(chosen.size);
     panel.querySelector('#zce-load').textContent=running?'수집 중...':'과거 대화 불러오기';
     panel.querySelector('#zce-load').disabled=running;
     panel.querySelector('#zce-stop').disabled=!running;
@@ -535,6 +536,12 @@
       #zce-panel .zce-row input:not([type="range"]){flex:1;min-width:50px;width:40px}
       #zce-panel input:not([type="checkbox"]){background:#30303a;border:1px solid #777;border-radius:6px;color:white;padding:7px;font-size:13px}
       #zce-panel .zce-status{white-space:pre-wrap;background:#30303a;border-radius:7px;padding:8px;margin:6px 0}
+      #zce-panel .zce-summary-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:9px 0 10px}
+      #zce-panel .zce-summary-card{min-width:0;background:#30303a;border-radius:9px;padding:9px 6px;text-align:center}
+      #zce-panel .zce-summary-label{display:block;color:#bdbdc9;font-size:11px;font-weight:600}
+      #zce-panel .zce-summary-number{display:block;color:#fff;font-size:24px;font-weight:750;line-height:1.35;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+      #zce-panel .zce-summary-card.zce-summary-selected .zce-summary-label,#zce-panel .zce-summary-card.zce-summary-selected .zce-summary-number{color:#8ce7b3}
+      #zce-panel #zce-user-name.zce-name-empty{border:2px solid #52c58b;box-shadow:0 0 0 1px #52c58b44}
       #zce-panel .zce-filter{display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:12px}
       #zce-panel .zce-filter input{width:17px;height:17px;flex:none;accent-color:#42b878}
       #zce-panel .zce-preview{max-height:290px;overflow:auto;border:1px solid #454550;border-radius:10px;padding:4px}
@@ -563,7 +570,11 @@
     panel=document.createElement('section');panel.id='zce-panel';panel.hidden=true;
     panel.innerHTML=`
       <div class="zce-head" id="zce-drag-head"><strong style="flex:1;font-size:15px">제타 대화 내보내기</strong><span class="zce-drag-label">↕ 이동</span><button data-act="close" type="button">닫기</button></div>
-      <div class="zce-status" id="zce-info"></div><div id="zce-summary"></div>
+      <div class="zce-status" id="zce-info"></div>
+      <div class="zce-summary-cards" id="zce-summary" aria-live="polite">
+        <div class="zce-summary-card"><span class="zce-summary-label">수집한 대화</span><strong class="zce-summary-number" id="zce-collected-count">0</strong></div>
+        <div class="zce-summary-card zce-summary-selected"><span class="zce-summary-label">선택한 대화</span><strong class="zce-summary-number" id="zce-selected-count">0</strong></div>
+      </div>
       <div class="zce-row"><button id="zce-load" data-act="load">과거 대화 불러오기</button><button id="zce-stop" data-act="stop">중지</button></div>
       <div class="zce-note">제타 채팅방에서 과거 대화와 상태창을 함께 불러옵니다. 상태창이 없는 방에서도 그대로 작동합니다. 번호는 오래된 순서부터 매겨집니다.</div>
       <div class="zce-row"><button data-act="recent" data-n="5">최근 5</button><button data-act="recent" data-n="10">최근 10</button><button data-act="recent" data-n="50">최근 50</button><button data-act="recent" data-n="100">최근 100</button></div>
@@ -582,7 +593,7 @@
       <div class="zce-note" style="margin-top:10px;font-weight:700">대화 표시 방식</div>
       <label class="zce-filter"><input type="checkbox" id="zce-remove-time" checked> 날짜/시간 제거 (TXT)</label>
       <label class="zce-user-label" for="zce-user-name">사용자 이름 <span class="zce-note">(비워두면 사용자)</span></label>
-      <input id="zce-user-name" type="text" placeholder="사용자" maxlength="60" autocomplete="off" style="width:100%;margin:5px 0 8px">
+      <input id="zce-user-name" class="zce-name-empty" type="text" placeholder="사용자" maxlength="60" autocomplete="off" style="width:100%;margin:5px 0 8px">
       <div style="margin-top:10px">파일명 <input id="zce-name" value="제타_대화" style="width:100%"></div>
       <div class="zce-row"><button data-act="txt">TXT 저장</button><button data-act="json">JSON 저장</button></div>
       <div class="zce-note">TXT 상태창은 항상 「상태창:」으로 표기합니다. JSON 상태창은 role: info_box, speaker: 상태창, type: INFO_BOX로 구분하며 캐릭터 이름은 text에 유지합니다. 일반 대화의 기존 저장 형식과 JSON time은 유지됩니다.</div>
@@ -604,6 +615,11 @@
       if(!panel.hidden)applyUi();
       update();
     });
+    const userNameInput=panel.querySelector('#zce-user-name');
+    const updateNameOutline=()=>userNameInput.classList.toggle('zce-name-empty',!userNameInput.value.trim());
+    userNameInput.addEventListener('input',updateNameOutline);
+    userNameInput.addEventListener('change',updateNameOutline);
+    updateNameOutline();
     panel.addEventListener('input',e=>{
       if(e.target.id==='zce-button-size'){ui.buttonSize=Number(e.target.value);saveUi();applyUi();}
       if(e.target.id==='zce-panel-size'){ui.panelSize=Number(e.target.value);saveUi();applyUi();}
