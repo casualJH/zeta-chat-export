@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.1.2
+// @version      1.1.3
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @description  제타 대화·상태창 불러오기, 선택 및 TXT/JSON 내보내기
@@ -15,7 +15,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.1.2';
+  const VERSION = '1.1.3';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -528,8 +528,8 @@
       #zce-panel *{box-sizing:border-box}
       #zce-panel button{background:#3b3b49;color:white;border:1px solid #696978;border-radius:7px;padding:8px 7px;font:600 12px system-ui;cursor:pointer;flex:1}
       #zce-panel button:disabled{opacity:.5}
-      #zce-panel button.zce-primary-action{background:#246443;border-color:#69d1a0;color:#fff}
-      #zce-panel button.zce-primary-action:active{background:#1e5238}
+      #zce-panel button.zce-primary-action{background:#2e5c49;border-color:#679b82;color:#fff}
+      #zce-panel button.zce-primary-action:active{background:#274d3e}
       #zce-panel button[data-on="true"]{background:#246443;border-color:#69d1a0}
       #zce-panel .zce-head{display:flex;align-items:center;gap:7px;cursor:grab;user-select:none;-webkit-user-select:none;min-height:30px}
       #zce-panel .zce-head button{flex:none}
@@ -543,7 +543,7 @@
       #zce-panel .zce-summary-label{display:block;color:#bdbdc9;font-size:11px;font-weight:600}
       #zce-panel .zce-summary-number{display:block;color:#fff;font-size:24px;font-weight:750;line-height:1.35;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
       #zce-panel .zce-summary-card.zce-summary-selected .zce-summary-label,#zce-panel .zce-summary-card.zce-summary-selected .zce-summary-number{color:#8ce7b3}
-      #zce-panel #zce-user-name.zce-name-empty{border:1px solid #52c58b;box-shadow:none}
+      #zce-panel #zce-user-name.zce-name-empty,#zce-panel #zce-name{border:1px solid #52c58b;box-shadow:none}
       #zce-panel .zce-exclude-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 4px;color:#bdbdc9;font-size:11px}
       #zce-panel .zce-exclude-heading strong{flex:none;font-weight:700}
       #zce-panel .zce-filter{display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:12px}
