@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.1.6
+// @version      1.1.7
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.1.6';
+  const VERSION = '1.1.7';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -241,9 +241,35 @@
   // Copy the same filtered, formatted content used for TXT export.
   // The click handler invokes this without a prior await to preserve user activation
   // on mobile Safari. If the modern API fails, try the legacy text selection route.
+  let copyFeedbackTimer=null;
+  let copyBusy=false;
+  function showCopyFeedback(state){
+    const button=panel?.querySelector('#zce-copy-txt');
+    if(!button)return;
+    if(copyFeedbackTimer!==null){clearTimeout(copyFeedbackTimer);copyFeedbackTimer=null;}
+    button.dataset.copyState=state;
+    button.textContent=state==='pending'?'복사 중…':state==='success'?'✓ 복사 완료':state==='error'?'복사 실패':'클립보드 복사';
+    button.disabled=state==='pending';
+    if(state==='success'||state==='error'){
+      copyFeedbackTimer=setTimeout(()=>{
+        copyFeedbackTimer=null;
+        button.dataset.copyState='';
+        button.textContent='클립보드 복사';
+        button.disabled=false;
+      },1000);
+    }
+  }
   async function copyToClipboard(){
+    if(copyBusy)return;
+    copyBusy=true;
+    showCopyFeedback('pending');
+    try {
+      await performClipboardCopy();
+    } finally { copyBusy=false; }
+  }
+  async function performClipboardCopy(){
     const rows=exportRows();
-    if(!rows.length){setInfo('복사할 본문이 없습니다. 선택 또는 제외 옵션을 확인하세요.');return;}
+    if(!rows.length){showCopyFeedback('error');setInfo('복사할 본문이 없습니다. 선택 또는 제외 옵션을 확인하세요.');return;}
     const removeTime=!!panel.querySelector('#zce-remove-time')?.checked;
     const userName=customUserName();
     const content=rows.map(m=>formatLine(m,removeTime,userName)).join('\n\n');
@@ -265,6 +291,7 @@
         copied=!!document.execCommand('copy');
       } catch (_) {} finally {area.remove();}
     }
+    showCopyFeedback(copied?'success':'error');
     setInfo(copied
       ? `선택 ${chosen.size}개 중 제외 조건 적용 후 ${rows.length}개 대화를 클립보드에 복사했습니다.`
       : '클립보드 복사에 실패했습니다. Safari 클립보드 권한을 확인하거나 TXT 저장을 이용하세요.');
@@ -620,6 +647,9 @@
       #zce-panel button[data-on="true"]{background:#246443;border-color:#69d1a0}
       #zce-panel button.zce-select-all{background:#578a72;border-color:#71a087;color:#fff}
       #zce-panel button.zce-select-all:active{background:#387559}
+      #zce-panel #zce-copy-txt[data-copy-state="success"]{background:#394c43;border-color:#6c8e7c;color:#e6f5ea}
+      #zce-panel #zce-copy-txt[data-copy-state="error"]{background:#594044;border-color:#ad7c83;color:#ffe7e9}
+      #zce-panel #zce-copy-txt[data-copy-state="pending"]{opacity:.85;cursor:wait}
       #zce-panel .zce-head{display:flex;align-items:center;gap:7px;cursor:grab;user-select:none;-webkit-user-select:none;min-height:30px}
       #zce-panel .zce-head button{flex:none}
       #zce-panel .zce-drag-label{color:#bdbdc9;font-size:11px;white-space:nowrap}
@@ -689,7 +719,7 @@
       <input id="zce-user-name" class="zce-name-empty" type="text" placeholder="사용자" maxlength="60" autocomplete="off" style="width:100%;margin:5px 0 8px">
       <div style="margin-top:10px">파일명 <input id="zce-name" value="제타_대화" style="width:100%"></div>
       <div class="zce-row"><button class="zce-primary-action" data-act="txt">TXT 저장</button><button class="zce-primary-action" data-act="json">JSON 저장</button></div>
-      <div class="zce-row"><button data-act="copy-txt">클립보드 복사</button></div>
+      <div class="zce-row"><button id="zce-copy-txt" data-act="copy-txt" type="button" aria-live="polite">클립보드 복사</button></div>
       <details id="zce-ui-settings"><summary>창·버튼 위치 및 크기 설정</summary>
         <div class="zce-note">버튼은 직접 드래그해 옮길 수 있고, 창 상단을 드래그하면 위치를 이동합니다. 오른쪽 아래 ◢ 모서리를 드래그하면 창 크기를 조절할 수 있습니다. 설정은 브라우저에 저장됩니다.</div>
         <div class="zce-size-control"><label for="zce-button-size">버튼 크기: <span id="zce-button-size-label">100%</span></label><input id="zce-button-size" type="range" min="60" max="160" step="10" value="100"></div>
