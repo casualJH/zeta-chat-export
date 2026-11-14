@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.1.3
+// @version      1.1.4
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
+// @homepageURL  https://github.com/casualJH/zeta-chat-export
 // @description  제타 대화·상태창 불러오기, 선택 및 TXT/JSON 내보내기
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -15,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.1.3';
+  const VERSION = '1.1.4';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -531,6 +532,8 @@
       #zce-panel button.zce-primary-action{background:#2e5c49;border-color:#679b82;color:#fff}
       #zce-panel button.zce-primary-action:active{background:#274d3e}
       #zce-panel button[data-on="true"]{background:#246443;border-color:#69d1a0}
+      #zce-panel button.zce-select-all{background:#578a72;border-color:#71a087;color:#fff}
+      #zce-panel button.zce-select-all:active{background:#387559}
       #zce-panel .zce-head{display:flex;align-items:center;gap:7px;cursor:grab;user-select:none;-webkit-user-select:none;min-height:30px}
       #zce-panel .zce-head button{flex:none}
       #zce-panel .zce-drag-label{color:#bdbdc9;font-size:11px;white-space:nowrap}
@@ -582,7 +585,7 @@
       <div class="zce-row"><button id="zce-load" class="zce-primary-action" data-act="load">과거 대화 불러오기</button><button id="zce-stop" data-act="stop">중지</button></div>
       <div class="zce-note">제타 채팅방에서 과거 대화와 상태창을 함께 불러옵니다. 상태창이 없는 방에서도 그대로 작동합니다. 번호는 오래된 순서부터 매겨집니다.</div>
       <div class="zce-row"><button data-act="recent" data-n="5">최근 5</button><button data-act="recent" data-n="10">최근 10</button><button data-act="recent" data-n="50">최근 50</button><button data-act="recent" data-n="100">최근 100</button></div>
-      <div class="zce-row"><button data-act="all">전체 선택</button><button data-act="clear">선택 해제</button></div>
+      <div class="zce-row"><button class="zce-select-all" data-act="all">전체 선택</button><button data-act="clear">선택 해제</button></div>
       <div class="zce-row"><input id="zce-start" type="number" min="1" placeholder="시작 번호"><input id="zce-end" type="number" min="1" placeholder="끝 번호"><button data-act="range">범위 추가</button></div>
       <div class="zce-row"><button data-act="select-mode" id="zce-select-mode-btn">화면 말풍선 직접 선택</button><button data-act="preview">대화 카드 선택 열기/닫기</button></div>
       <div class="zce-note">화면 선택 모드에서는 제타 말풍선을 누르면 선택/해제됩니다. 화면에 없는 과거 대화는 아래 카드 목록에서 선택하세요. 말풍선이 연결되지 않을 경우에도 카드 선택은 가능합니다.</div>
@@ -604,7 +607,8 @@
         <div class="zce-size-control"><label for="zce-button-size">버튼 크기: <span id="zce-button-size-label">100%</span></label><input id="zce-button-size" type="range" min="60" max="160" step="10" value="100"></div>
         <div class="zce-size-control"><label for="zce-panel-size">창 크기: <span id="zce-panel-size-label">100%</span></label><input id="zce-panel-size" type="range" min="70" max="130" step="10" value="100"></div>
         <div class="zce-row"><button data-act="reset-ui">위치·크기 기본값 복원</button></div>
-      </details>`;
+      </details>
+      <div class="zce-note" style="text-align:center;margin-top:12px"><a href="https://github.com/casualJH/zeta-chat-export" target="_blank" rel="noopener noreferrer" style="color:#9fb6ad;text-decoration:underline">GitHub 저장소</a></div>`;
     document.body.append(launch,panel);
     status=panel.querySelector('#zce-info');summary=panel.querySelector('#zce-summary');
     list=panel.querySelector('#zce-list');listNote=panel.querySelector('#zce-list-note');
