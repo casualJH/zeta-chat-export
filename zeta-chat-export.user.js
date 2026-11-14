@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.1.4
+// @version      1.1.5
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.1.4';
+  const VERSION = '1.1.5';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -275,15 +275,16 @@
   }
   let panel, status, list, summary, launch, launchLabel, launchCount, startInput, endInput, listNote;
   const UI_KEY='zeta-chat-export-ui-v1';
-  const defaultUi=()=>({buttonSize:100,panelSize:100,buttonPos:null,panelPos:null});
+  const defaultUi=()=>({buttonSize:100,buttonPos:null,panelPos:null,panelWidth:null,panelHeight:null});
   function readUi() {
     try {
       const data=JSON.parse(localStorage.getItem(UI_KEY)||'{}');
       return {
         buttonSize:Number.isFinite(data.buttonSize)?Math.max(60,Math.min(160,data.buttonSize)):100,
-        panelSize:Number.isFinite(data.panelSize)?Math.max(70,Math.min(130,data.panelSize)):100,
         buttonPos:data.buttonPos&&Number.isFinite(data.buttonPos.x)&&Number.isFinite(data.buttonPos.y)?data.buttonPos:null,
-        panelPos:data.panelPos&&Number.isFinite(data.panelPos.x)&&Number.isFinite(data.panelPos.y)?data.panelPos:null
+        panelPos:data.panelPos&&Number.isFinite(data.panelPos.x)&&Number.isFinite(data.panelPos.y)?data.panelPos:null,
+        panelWidth:Number.isFinite(data.panelWidth)&&data.panelWidth>0?data.panelWidth:null,
+        panelHeight:Number.isFinite(data.panelHeight)&&data.panelHeight>0?data.panelHeight:null
       };
     } catch (_) {return defaultUi();}
   }
@@ -306,22 +307,28 @@
     launch.style.fontSize=(13*b).toFixed(2)+'px';
     launch.style.padding=`${(10*b).toFixed(1)}px ${(13*b).toFixed(1)}px`;
     launch.style.borderRadius=(22*b).toFixed(1)+'px';
-    if(ui.panelSize===100){panel.style.width='';panel.style.maxHeight='';}
-    else {
-      panel.style.width=`min(${Math.round(360*ui.panelSize/100)}px, calc(100vw - 20px))`;
-      panel.style.maxHeight=`min(${Math.round(74*ui.panelSize/100)}vh, calc(100dvh - 16px))`;
-    }
+    panel.style.width='';
+    panel.style.maxHeight='';
+    // A manually resized panel uses exact pixel dimensions. Keep the previous
+    // Safari default dimensions until the triangular handle is actually dragged.
+    if(Number.isFinite(ui.panelWidth)&&Number.isFinite(ui.panelHeight)){
+      const maxW=Math.max(1,window.innerWidth-8);
+      const maxH=Math.max(1,window.innerHeight-8);
+      panel.style.width=Math.round(clamp(ui.panelWidth,Math.min(260,maxW),maxW))+'px';
+      panel.style.height=Math.round(clamp(ui.panelHeight,Math.min(240,maxH),maxH))+'px';
+      panel.style.maxHeight='none';
+    }else panel.style.height='';
     // Preserve original mobile Safari right/bottom + safe-area defaults until moved.
     setAbsPosition(launch,ui.buttonPos);
-    if(!panel.hidden)setAbsPosition(panel,ui.panelPos);
+    if(!panel.hidden){
+      setAbsPosition(panel,ui.panelPos);
+      // If viewport dimensions shrink, keep both edges of the window visible.
+      if(ui.panelPos){ui.panelPos={x:parseFloat(panel.style.left),y:parseFloat(panel.style.top)};}
+    }
     const bRange=panel.querySelector('#zce-button-size');
-    const pRange=panel.querySelector('#zce-panel-size');
     if(bRange)bRange.value=ui.buttonSize;
-    if(pRange)pRange.value=ui.panelSize;
     const bLabel=panel.querySelector('#zce-button-size-label');
-    const pLabel=panel.querySelector('#zce-panel-size-label');
     if(bLabel)bLabel.textContent=ui.buttonSize+'%';
-    if(pLabel)pLabel.textContent=ui.panelSize+'%';
   }
   // Pointer Events work for touch and mouse; moving is separate from ordinary click/tap.
   let draggedLaunch=false;
@@ -359,6 +366,52 @@
         }
       }
       window.addEventListener('pointermove',onMove,{passive:false});
+      window.addEventListener('pointerup',end);
+      window.addEventListener('pointercancel',end);
+    });
+  }
+  // Same lower-right ◢ resize handle as zeta-text-library.
+  // Pointer Events support mouse, touch and mobile Safari. Save pixel size in
+  // the existing UI key so refreshing or changing rooms retains the geometry.
+  function addResizeGrip(grip){
+    grip.addEventListener('pointerdown',down=>{
+      if(down.button!==undefined&&down.button!==0)return;
+      down.preventDefault();
+      down.stopPropagation();
+      const rect=panel.getBoundingClientRect();
+      const pointerId=down.pointerId,startX=down.clientX,startY=down.clientY;
+      const minW=Math.min(260,Math.max(1,window.innerWidth-8));
+      const minH=Math.min(240,Math.max(1,window.innerHeight-8));
+      // Fix the current top-left corner before changing dimensions; without
+      // this a right/bottom positioned panel grows towards the wrong corner.
+      const left=clamp(rect.left,4,Math.max(4,window.innerWidth-minW-4));
+      const top=clamp(rect.top,4,Math.max(4,window.innerHeight-minH-4));
+      const maxW=Math.max(minW,window.innerWidth-left-4);
+      const maxH=Math.max(minH,window.innerHeight-top-4);
+      panel.style.left=left+'px';panel.style.top=top+'px';
+      panel.style.right='auto';panel.style.bottom='auto';
+      panel.style.width=rect.width+'px';panel.style.height=rect.height+'px';
+      panel.style.maxHeight='none';
+      let moved=false;
+      function move(e){
+        if(e.pointerId!==pointerId)return;
+        const dx=e.clientX-startX,dy=e.clientY-startY;
+        if(!moved&&Math.hypot(dx,dy)<5)return;
+        moved=true;e.preventDefault();
+        ui.panelWidth=clamp(rect.width+dx,minW,maxW);
+        ui.panelHeight=clamp(rect.height+dy,minH,maxH);
+        panel.style.width=ui.panelWidth+'px';
+        panel.style.height=ui.panelHeight+'px';
+      }
+      function end(e){
+        if(e.pointerId!==pointerId)return;
+        window.removeEventListener('pointermove',move);
+        window.removeEventListener('pointerup',end);
+        window.removeEventListener('pointercancel',end);
+        if(moved){ui.panelPos={x:left,y:top};saveUi();}
+        else applyUi();
+      }
+      window.addEventListener('pointermove',move,{passive:false});
       window.addEventListener('pointerup',end);
       window.addEventListener('pointercancel',end);
     });
@@ -524,8 +577,10 @@
       #zce-launch.zce-mode-on{border-color:#44c384;box-shadow:0 0 0 2px #44c38455}
       #zce-launch .zce-selection-count{position:absolute;right:-6px;top:-12px;min-width:48px;padding:3px 7px;border-radius:16px;background:#246443;color:#fff;border:1px solid #90eac1;font:700 11px/1.25 system-ui;white-space:nowrap;pointer-events:none;box-sizing:border-box}
       #zce-launch .zce-selection-count[hidden]{display:none!important}
-      #zce-panel{position:fixed;z-index:2147483646;right:10px;bottom:calc(145px + env(safe-area-inset-bottom,0px));width:min(360px,calc(100vw - 20px));max-height:74vh;overflow:auto;background:#202029;color:white;border:1px solid #555;border-radius:14px;padding:13px;font:13px/1.45 system-ui;box-sizing:border-box;box-shadow:0 7px 28px #0008;overscroll-behavior:contain}
+      #zce-panel{position:fixed;z-index:2147483646;right:10px;bottom:calc(145px + env(safe-area-inset-bottom,0px));width:min(360px,calc(100vw - 20px));max-height:74vh;overflow:hidden;display:flex;flex-direction:column;background:#202029;color:white;border:1px solid #555;border-radius:14px;padding:13px;font:13px/1.45 system-ui;box-sizing:border-box;box-shadow:0 7px 28px #0008;overscroll-behavior:contain}
       #zce-panel[hidden],#zce-panel [hidden],#zce-tip[hidden]{display:none!important}
+      #zce-panel .zce-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
+      #zce-panel .zce-resize-grip{position:absolute;right:0;bottom:0;width:30px;height:30px;z-index:4;display:flex;align-items:flex-end;justify-content:flex-end;padding:5px;color:#adb4cf;font:19px/1 system-ui;cursor:nwse-resize;touch-action:none;user-select:none;-webkit-user-select:none;background:transparent;border:0;border-radius:0}
       #zce-panel *{box-sizing:border-box}
       #zce-panel button{background:#3b3b49;color:white;border:1px solid #696978;border-radius:7px;padding:8px 7px;font:600 12px system-ui;cursor:pointer;flex:1}
       #zce-panel button:disabled{opacity:.5}
@@ -577,6 +632,7 @@
     panel=document.createElement('section');panel.id='zce-panel';panel.hidden=true;
     panel.innerHTML=`
       <div class="zce-head" id="zce-drag-head"><strong style="flex:1;font-size:15px">제타 대화 내보내기</strong><span class="zce-drag-label">↕ 이동</span><button data-act="close" type="button">닫기</button></div>
+      <div class="zce-scroll">
       <div class="zce-status" id="zce-info"></div>
       <div class="zce-summary-cards" id="zce-summary" aria-live="polite">
         <div class="zce-summary-card"><span class="zce-summary-label">수집한 대화</span><strong class="zce-summary-number" id="zce-collected-count">0</strong></div>
@@ -603,18 +659,18 @@
       <div style="margin-top:10px">파일명 <input id="zce-name" value="제타_대화" style="width:100%"></div>
       <div class="zce-row"><button class="zce-primary-action" data-act="txt">TXT 저장</button><button class="zce-primary-action" data-act="json">JSON 저장</button></div>
       <details id="zce-ui-settings"><summary>창·버튼 위치 및 크기 설정</summary>
-        <div class="zce-note">버튼은 직접 드래그해 옮길 수 있고, 이 창은 상단 제목 영역을 드래그하면 이동합니다. 설정은 브라우저에 저장됩니다.</div>
+        <div class="zce-note">버튼은 직접 드래그해 옮길 수 있고, 창 상단을 드래그하면 위치를 이동합니다. 오른쪽 아래 ◢ 모서리를 드래그하면 창 크기를 조절할 수 있습니다. 설정은 브라우저에 저장됩니다.</div>
         <div class="zce-size-control"><label for="zce-button-size">버튼 크기: <span id="zce-button-size-label">100%</span></label><input id="zce-button-size" type="range" min="60" max="160" step="10" value="100"></div>
-        <div class="zce-size-control"><label for="zce-panel-size">창 크기: <span id="zce-panel-size-label">100%</span></label><input id="zce-panel-size" type="range" min="70" max="130" step="10" value="100"></div>
         <div class="zce-row"><button data-act="reset-ui">위치·크기 기본값 복원</button></div>
       </details>
-      <div class="zce-note" style="text-align:center;margin-top:12px"><a href="https://github.com/casualJH/zeta-chat-export" target="_blank" rel="noopener noreferrer" style="color:#9fb6ad;text-decoration:underline">GitHub 저장소</a></div>`;
+      </div><div class="zce-resize-grip" id="zce-resize-grip" title="끌어서 창 크기 조절" aria-label="창 크기 조절">◢</div>`;
     document.body.append(launch,panel);
     status=panel.querySelector('#zce-info');summary=panel.querySelector('#zce-summary');
     list=panel.querySelector('#zce-list');listNote=panel.querySelector('#zce-list-note');
     startInput=panel.querySelector('#zce-start');endInput=panel.querySelector('#zce-end');
     addDrag(launch,launch,'button');
     addDrag(panel.querySelector('#zce-drag-head'),panel,'panel');
+    addResizeGrip(panel.querySelector('#zce-resize-grip'));
     launch.addEventListener('click',e=>{
       if(draggedLaunch){e.preventDefault();draggedLaunch=false;return;}
       panel.hidden=!panel.hidden;
@@ -628,7 +684,6 @@
     updateNameOutline();
     panel.addEventListener('input',e=>{
       if(e.target.id==='zce-button-size'){ui.buttonSize=Number(e.target.value);saveUi();applyUi();}
-      if(e.target.id==='zce-panel-size'){ui.panelSize=Number(e.target.value);saveUi();applyUi();}
     });
     panel.addEventListener('click',e=>{
       const b=e.target.closest('button[data-act]');if(!b)return;
