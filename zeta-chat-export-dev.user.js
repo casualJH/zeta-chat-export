@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.9
+// @version      1.1.8-beta.10
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.9';
+  const VERSION = '1.1.8-beta.10';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -577,9 +577,25 @@
     return first?String(first.messageId||first.id):'';
   }
   function responseContainer(start,matched){
+    // A turn may span several blocks, but a message highlight must never use
+    // a broad virtualized wrapper containing multiple independent responses.
+    if(groupMode==='message'){
+      const body=start.closest('[data-sentry-component="BodyView"]') ||
+        matched.closest('[data-sentry-component="BodyView"]');
+      if(body)return body;
+      const wrapper=start.closest('[data-index]');
+      if(wrapper&&!wrapper.querySelector('[data-index]')){
+        const text=norm(wrapper.innerText||wrapper.textContent||'');
+        const candidates=messages.filter(m=>{
+          const v=norm(m.text);
+          return v.length>=10&&text.includes(v.slice(0,Math.min(45,v.length)));
+        });
+        if(new Set(candidates.map(m=>String(m.messageId||m.id))).size<=1)return wrapper;
+      }
+      return matched;
+    }
     const wrapper=start.closest('[data-index]');
     if(wrapper&&!wrapper.closest('#zce-panel,#zce-launch'))return wrapper;
-    // Alternate Zeta layouts put each independent response in an article/section.
     const body=start.closest('[data-sentry-component="BodyView"]') ||
       matched.closest('[data-sentry-component="BodyView"]');
     if(body)return body;
@@ -666,6 +682,52 @@
     }
     const visibleTop=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
     highlightLayer.style.clipPath=`inset(${visibleTop}px 0px 0px 0px)`;
+    if(groupMode==='message'){
+      // Message mode is intentionally strict: do NOT infer a message's
+      // rectangle by scanning ancestor text. Such guesses produced enormous
+      // boxes crossing several replies. Only directly matched elements may
+      // supply a rectangle, and each mark belongs to its exact messageId.
+      const groupList=displayGroups();
+      const keyToIndex=new Map(groupList.map((g,i)=>[String(g.id),i]));
+      const rectangles=[];
+      for(const [key,mark] of responseMarks){
+        if(!mark.element.isConnected){responseMarks.delete(key);continue;}
+        const index=keyToIndex.get(String(key));
+        if(index===undefined||!groupList[index].parts.some(p=>chosen.has(p.id)))continue;
+        const rect=mark.element.getBoundingClientRect();
+        if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)continue;
+        // If a fallback selector reaches a chat-sized container, skip it
+        // instead of marking unrelated content as selected.
+        if(rect.height>innerHeight*0.85 && !mark.element.matches('[data-sentry-component="BodyView"]'))continue;
+        rectangles.push({index,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom});
+      }
+      rectangles.sort((a,b)=>a.index-b.index);
+      const outlines=[];
+      for(const box of rectangles){
+        const prev=outlines[outlines.length-1];
+        const contiguous=prev&&box.index===prev.endIndex+1;
+        const verticallyNear=prev&&box.top>=prev.bottom-8&&box.top-prev.bottom<=24;
+        const horizontallyNear=prev&&Math.abs(box.left-prev.left)<=32&&Math.abs(box.right-prev.right)<=32;
+        if(contiguous&&verticallyNear&&horizontallyNear){
+          prev.left=Math.min(prev.left,box.left);
+          prev.right=Math.max(prev.right,box.right);
+          prev.bottom=Math.max(prev.bottom,box.bottom);
+          prev.endIndex=box.index;
+        }else outlines.push({...box,endIndex:box.index});
+      }
+      highlightLayer.replaceChildren();
+      for(const r of outlines){
+        const x=Math.max(0,r.left+2),y=Math.max(0,r.top+2);
+        const right=Math.min(innerWidth,r.right-2),bottom=Math.min(innerHeight,r.bottom-2);
+        if(right<=x||bottom<=y)continue;
+        const div=document.createElement('div');
+        div.className='zce-highlight-outline';
+        div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${bottom-y}px`;
+        highlightLayer.appendChild(div);
+      }
+      return;
+    }
+    // Turn mode: retain its already-working full-turn highlight behaviour.
     // Inspect only actual Zeta message rows, not the virtualized chat's
     // container. This gives every visible part of a selected turn a box on
     // the FIRST tap, even when the tap occurred in only one of its replies.
