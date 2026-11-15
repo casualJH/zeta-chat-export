@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.3
+// @version      1.1.8-beta.4
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.3';
+  const VERSION = '1.1.8-beta.4';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -812,10 +812,10 @@
       #zce-panel summary{cursor:pointer;font-weight:700}
       #zce-panel .zce-size-control{margin:9px 0}
       #zce-panel .zce-size-control input[type="range"]{display:block;width:100%;margin-top:6px;accent-color:#52c58b}
-      /* An inset rounded border spans the whole response, without changing its
-         geometry or touching neighbouring responses (even at zero CSS gap). */
-      html.zce-select-mode .zce-site-selected{position:relative!important;outline:none!important;border-radius:12px!important}
-      html.zce-select-mode .zce-site-selected::after{content:"";position:absolute;inset:3px 2px;border:2px solid #49ce88;border-radius:12px;pointer-events:none;z-index:2;box-sizing:border-box;background:rgba(73,206,136,.035)}
+      /* Only paint the existing response box. Never override position or
+         attach an absolutely positioned pseudo-element: Zeta uses positioned
+         and virtualized rows, and those changes can create giant blank gaps. */
+      html.zce-select-mode .zce-site-selected{outline:2px solid #49ce88!important;outline-offset:-3px!important;border-radius:12px!important;box-shadow:inset 0 0 0 1px rgba(73,206,136,.18)!important}
       #zce-tip{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:#263a30;color:white;border:1px solid #6ad39b;border-radius:10px;padding:8px 12px;max-width:min(340px,calc(100vw - 20px));font:12px/1.4 system-ui;text-align:center;pointer-events:none}
     `;
     (document.head||document.documentElement).appendChild(style);
