@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.2.0-beta.1
+// @version      1.2.0-beta.2
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.2.0-beta.1';
+  const VERSION = '1.2.0-beta.2';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -682,11 +682,12 @@
     }
     const visibleTop=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
     highlightLayer.style.clipPath=`inset(${visibleTop}px 0px 0px 0px)`;
-    // Selecting ALL before bubble mode must highlight all visible replies,
-    // including short/duplicate phrases that cannot be text-matched reliably.
-    // This visual-only path never modifies selection, turns, or export data.
+    // The full-row fallback is safe only for the merged TURN outline.
+    // In MESSAGE mode, [data-index] also occurs on notices, controls and
+    // other non-message rows. Its broad fallback falsely outlines those.
+    // Always use the precise direct-match message renderer below instead.
     const fullySelectedGroups=displayGroups();
-    if(fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
+    if(groupMode==='turn'&&fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
       const fullRows=[...document.querySelectorAll('[data-index]')]
         .filter(el=>!el.closest('#zce-panel,#zce-highlight-layer,#zce-launch')&&!el.querySelector('[data-index]'))
         .map(el=>({el,rect:el.getBoundingClientRect()}))
