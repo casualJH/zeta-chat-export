@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.10
+// @version      1.2.0-beta.1
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.10';
+  const VERSION = '1.2.0-beta.1';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -682,6 +682,44 @@
     }
     const visibleTop=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
     highlightLayer.style.clipPath=`inset(${visibleTop}px 0px 0px 0px)`;
+    // Selecting ALL before bubble mode must highlight all visible replies,
+    // including short/duplicate phrases that cannot be text-matched reliably.
+    // This visual-only path never modifies selection, turns, or export data.
+    const fullySelectedGroups=displayGroups();
+    if(fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
+      const fullRows=[...document.querySelectorAll('[data-index]')]
+        .filter(el=>!el.closest('#zce-panel,#zce-highlight-layer,#zce-launch')&&!el.querySelector('[data-index]'))
+        .map(el=>({el,rect:el.getBoundingClientRect()}))
+        .filter(({el,rect})=>rect.width>=24&&rect.height>=12&&
+          rect.bottom>visibleTop&&rect.top<innerHeight&&
+          (norm(el.innerText||el.textContent||'').length>0||el.querySelector('img,video')));
+      if(fullRows.length){
+        const addOutline=(left,top,right,bottom)=>{
+          const x=Math.max(0,left+2),y=Math.max(0,top+2);
+          const toX=Math.min(innerWidth,right-2),toY=Math.min(innerHeight,bottom-2);
+          if(toX<=x||toY<=y)return;
+          const div=document.createElement('div');
+          div.className='zce-highlight-outline';
+          div.style.cssText=`left:${x}px;top:${y}px;width:${toX-x}px;height:${toY-y}px`;
+          highlightLayer.appendChild(div);
+        };
+        highlightLayer.replaceChildren();
+        if(groupMode==='turn'){
+          // One continuous outline covering every visible selected turn.
+          addOutline(
+            Math.min(...fullRows.map(v=>v.rect.left)),
+            Math.min(...fullRows.map(v=>v.rect.top)),
+            Math.max(...fullRows.map(v=>v.rect.right)),
+            Math.max(...fullRows.map(v=>v.rect.bottom))
+          );
+        }else{
+          // Individual message rows remain independent in message mode.
+          for(const {rect} of fullRows)
+            addOutline(rect.left,rect.top,rect.right,rect.bottom);
+        }
+        return;
+      }
+    }
     if(groupMode==='message'){
       // Message mode is intentionally strict: do NOT infer a message's
       // rectangle by scanning ancestor text. Such guesses produced enormous
