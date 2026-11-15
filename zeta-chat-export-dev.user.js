@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.2
+// @version      1.1.8-beta.3
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.2';
+  const VERSION = '1.1.8-beta.3';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -568,11 +568,29 @@
     return String(s||'').normalize('NFC').toLocaleLowerCase()
       .replace(/[\u200b-\u200f\ufeff]/g,'').replace(/[\s*`~_>#]/g,'');
   }
+  // Prefer Zeta's complete response wrapper. A response may contain several
+  // formatted speaker blocks; BodyView alone is too narrow for the desired box.
+  // Keep visual marks indexed by response key, not by a descendant DOM element.
+  const responseMarks=new Map();
+  function responseKey(parts){
+    const first=parts[0];
+    return first?String(first.messageId||first.id):'';
+  }
+  function responseContainer(start,matched){
+    const wrapper=start.closest('[data-index]');
+    if(wrapper&&!wrapper.closest('#zce-panel,#zce-launch'))return wrapper;
+    // Alternate Zeta layouts put each independent response in an article/section.
+    const body=start.closest('[data-sentry-component="BodyView"]') ||
+      matched.closest('[data-sentry-component="BodyView"]');
+    if(body)return body;
+    return matched;
+  }
   function matchBubbles(node){
     let el=node instanceof Element?node:node?.parentElement;
     if(!el)return null;
     const initial=el;
-    for(let depth=0;el&&el!==document.body&&depth<15;el=el.parentElement,depth++){
+    const possible=[];
+    for(let depth=0;el&&el!==document.body&&depth<16;el=el.parentElement,depth++){
       if(el===panel||el===launch)return null;
       const attr=[el.getAttribute('data-message-id'),el.getAttribute('data-id'),el.id]
         .find(v=>v&&/MESSAGE-/i.test(v));
@@ -580,41 +598,56 @@
       if(attr)found=messages.filter(m=>m.messageId&&attr.includes(m.messageId));
       if(!found.length){
         const rect=el.getBoundingClientRect();
-        if(rect.width<35||rect.height<14)continue;
+        if(rect.width<20||rect.height<12)continue;
         const content=norm(el.innerText||el.textContent||'');
-        if(content.length<9||content.length>18000)continue;
-        const matches=[];
+        if(!content||content.length>18000)continue;
+        const matched=[];
         for(const m of messages){
-          const body=norm(m.text);if(body.length<9)continue;
-          const prefix=body.slice(0,Math.min(55,body.length));
-          if(content.includes(prefix)||(content.length>=22&&body.includes(content)))matches.push(m);
-          if(matches.length>24)break;
+          const body=norm(m.text);if(!body)continue;
+          const sample=body.slice(0,Math.min(55,body.length));
+          // Short replies are common ('네', '응'); only match them if unique
+          // within the candidate response. Do not mark an arbitrary same-text reply.
+          if(content.includes(sample)||(content.length>=2&&body.includes(content)))
+            matched.push(m);
+          if(matched.length>24)break;
         }
-        const groups=new Set(matches.map(m=>m.messageId||m.id));
-        if(groups.size===1&&matches.length)found=matches;
+        const ids=new Set(matched.map(m=>String(m.messageId||m.id)));
+        if(ids.size===1&&matched.length)found=matched;
       }
       if(!found.length)continue;
       const id=found[0].messageId;
       const parts=id?messages.filter(m=>m.messageId===id):[found[0]];
-      // Prefer the actual content block instead of the entire [data-index]
-      // wrapper: outlines should not overlap adjacent response containers.
-      const body=initial.closest('[data-sentry-component="BodyView"]');
-      const visual=body&&el.contains(body)?body:(el.closest('[data-sentry-component="BodyView"]')||el);
-      return {element:visual,items:parts};
+      possible.push({element:responseContainer(initial,el),items:parts});
+      // A narrow match is more trustworthy than a broad ancestor matching all
+      // visible conversation. Once found, stop before ascending into the chat.
+      break;
     }
-    return null;
+    return possible[0]||null;
   }
   function updatePageHighlights(){
-    for(const [el,ids] of pageMarked){
-      if(!el.isConnected){pageMarked.delete(el);continue;}
-      el.classList.toggle('zce-site-selected',ids.some(id=>chosen.has(id)));
+    for(const [key,mark] of responseMarks){
+      const {element,ids}=mark;
+      if(!element.isConnected){element.classList.remove('zce-site-selected');responseMarks.delete(key);continue;}
+      element.classList.toggle('zce-site-selected',ids.some(id=>chosen.has(id)));
     }
+  }
+  function selectedResponseCount(){
+    if(groupMode==='message'){
+      return displayGroups().filter(g=>g.parts.some(p=>chosen.has(p.id))).length;
+    }
+    let count=0;
+    for(const turn of turns){
+      if(turn.user.length&&turn.user.some(p=>chosen.has(p.id)))count++;
+      if(turn.character.length&&turn.character.some(p=>chosen.has(p.id)))count++;
+    }
+    return count;
   }
   function setSelectionMode(on){
     selectionMode=!!on;
     document.documentElement.classList.toggle('zce-select-mode',selectionMode);
     if(!selectionMode){
-      for(const el of pageMarked.keys())el.classList.remove('zce-site-selected');
+      for(const {element} of responseMarks.values())element.classList.remove('zce-site-selected');
+      responseMarks.clear();
       pageMarked.clear();
     }
     update();
@@ -638,9 +671,12 @@
     const ids=items.map(m=>m.id);
     const shouldAdd=ids.some(id=>!chosen.has(id));
     ids.forEach(id=>shouldAdd?chosen.add(id):chosen.delete(id));
-    pageMarked.set(match.element,ids);
+    const key=responseKey(match.items);
+    const existing=responseMarks.get(key);
+    if(existing&&existing.element!==match.element)existing.element.classList.remove('zce-site-selected');
+    responseMarks.set(key,{element:match.element,ids});
     updatePageHighlights();update();
-    flashTip(shouldAdd?`선택 완료 · 현재 ${selectedGroupCount()}${groupMode==='turn'?'턴':'개 메시지'} (일부 선택 포함)`:`선택 해제 · 현재 ${chosen.size}개 메시지 항목`);
+    flashTip(`${shouldAdd?'선택 완료':'선택 해제'} · 선택 응답 ${selectedResponseCount()}개`);
   }
   document.addEventListener('click',onPageClick,true);
   function update(){
@@ -660,7 +696,7 @@
     modeButton.dataset.on=selectionMode?'true':'false';
     launch.classList.toggle('zce-mode-on',selectionMode);
     launchLabel.textContent=selectionMode?'대화 저장 · 선택 중':'대화 저장';
-    launchCount.textContent=`선택 ${groups.filter(g=>g.parts.some(p=>chosen.has(p.id))).length}${groupMode==='turn'?'턴':'개'}`;
+    launchCount.textContent=`선택 응답 ${selectedResponseCount()}개`;
     launchCount.hidden=!selectionMode;
     launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 ${chosen.size}개 선택됨`:'대화 저장');
     if(!list.hidden)renderList();
@@ -776,7 +812,10 @@
       #zce-panel summary{cursor:pointer;font-weight:700}
       #zce-panel .zce-size-control{margin:9px 0}
       #zce-panel .zce-size-control input[type="range"]{display:block;width:100%;margin-top:6px;accent-color:#52c58b}
-      html.zce-select-mode .zce-site-selected{outline:2px solid #49ce88!important;outline-offset:-2px!important;border-radius:8px!important;box-shadow:inset 0 0 0 1px #49ce8833!important}
+      /* An inset rounded border spans the whole response, without changing its
+         geometry or touching neighbouring responses (even at zero CSS gap). */
+      html.zce-select-mode .zce-site-selected{position:relative!important;outline:none!important;border-radius:12px!important}
+      html.zce-select-mode .zce-site-selected::after{content:"";position:absolute;inset:3px 2px;border:2px solid #49ce88;border-radius:12px;pointer-events:none;z-index:2;box-sizing:border-box;background:rgba(73,206,136,.035)}
       #zce-tip{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:#263a30;color:white;border:1px solid #6ad39b;border-radius:10px;padding:8px 12px;max-width:min(340px,calc(100vw - 20px));font:12px/1.4 system-ui;text-align:center;pointer-events:none}
     `;
     (document.head||document.documentElement).appendChild(style);
