@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.8
+// @version      1.1.8-beta.9
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.8';
+  const VERSION = '1.1.8-beta.9';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -677,10 +677,18 @@
       if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)return null;
       return {el,rect,text:norm(el.innerText||el.textContent||'')};
     }).filter(Boolean);
-    const groups=displayGroups().filter(g=>g.parts.length&&g.parts.some(p=>chosen.has(p.id)));
+    // Preserve every group's original index: visual proximity alone cannot
+    // decide adjacency. An unselected turn must always split the outline.
+    const allGroups=displayGroups();
+    const selectedIndices=[];
+    for(let i=0;i<allGroups.length;i++){
+      const group=allGroups[i];
+      if(group.parts.length&&group.parts.some(p=>chosen.has(p.id)))selectedIndices.push(i);
+    }
     const rectangles=[];
     const usedElements=new Set();
-    for(const group of groups){
+    for(const groupIndex of selectedIndices){
+      const group=allGroups[groupIndex];
       const chosenParts=group.parts.filter(p=>chosen.has(p.id));
       const groupRects=[];
       for(const entry of visible){
@@ -706,15 +714,34 @@
       }
       if(!groupRects.length)continue;
       rectangles.push({
+        index:groupIndex,
         top:Math.min(...groupRects.map(r=>r.top)),
         bottom:Math.max(...groupRects.map(r=>r.bottom)),
         left:Math.min(...groupRects.map(r=>r.left)),
         right:Math.max(...groupRects.map(r=>r.right))
       });
     }
-    // Each selected turn gets exactly one visual border. For message mode,
-    // each original message has its own border even if adjacent.
-    const merged=rectangles;
+    // Turn mode: merge all consecutive selected turns into ONE outline.
+    // Break a run at every unselected turn, regardless of the pixel distance
+    // between boxes. In message mode each selected message remains separate.
+    const merged=[];
+    const selectedIndexSet=new Set(selectedIndices);
+    for(const rect of rectangles){
+      const prev=merged[merged.length-1];
+      const uninterrupted=groupMode==='turn'&&prev&&
+        rect.index>prev.endIndex&&
+        Array.from({length:rect.index-prev.endIndex-1},
+          (_,offset)=>prev.endIndex+offset+1).every(i=>selectedIndexSet.has(i));
+      if(uninterrupted){
+        prev.left=Math.min(prev.left,rect.left);
+        prev.right=Math.max(prev.right,rect.right);
+        prev.top=Math.min(prev.top,rect.top);
+        prev.bottom=Math.max(prev.bottom,rect.bottom);
+        prev.endIndex=rect.index;
+      }else{
+        merged.push({...rect,endIndex:rect.index});
+      }
+    }
     highlightLayer.replaceChildren();
     for(const r of merged){
       const div=document.createElement('div');
