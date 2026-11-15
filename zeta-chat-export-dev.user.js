@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.4
+// @version      1.1.8-beta.5
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.4';
+  const VERSION = '1.1.8-beta.5';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -624,13 +624,72 @@
     }
     return possible[0]||null;
   }
-  function updatePageHighlights(){
+  // Paint outlines in a separate, pointer-transparent viewport overlay.
+  // This does not change Zeta's positioned/virtualized message DOM at all.
+  // Visually adjoining selected responses are combined into one rounded outline.
+  let highlightLayer=null,highlightFrame=0;
+  function clearHighlightLayer(){
+    if(highlightFrame){cancelAnimationFrame(highlightFrame);highlightFrame=0;}
+    if(highlightLayer){highlightLayer.remove();highlightLayer=null;}
+  }
+  function scheduleHighlights(){
+    if(!selectionMode||highlightFrame)return;
+    highlightFrame=requestAnimationFrame(()=>{
+      highlightFrame=0;
+      drawResponseHighlights();
+    });
+  }
+  function drawResponseHighlights(){
+    if(!selectionMode){clearHighlightLayer();return;}
+    if(!highlightLayer){
+      highlightLayer=document.createElement('div');
+      highlightLayer.id='zce-highlight-layer';
+      highlightLayer.setAttribute('aria-hidden','true');
+      document.body.appendChild(highlightLayer);
+    }
+    const rectangles=[];
     for(const [key,mark] of responseMarks){
-      const {element,ids}=mark;
-      if(!element.isConnected){element.classList.remove('zce-site-selected');responseMarks.delete(key);continue;}
-      element.classList.toggle('zce-site-selected',ids.some(id=>chosen.has(id)));
+      if(!mark.element.isConnected){responseMarks.delete(key);continue;}
+      if(!mark.ids.some(id=>chosen.has(id)))continue;
+      const r=mark.element.getBoundingClientRect();
+      if(r.width<24||r.height<12||r.bottom<0||r.top>innerHeight)continue;
+      rectangles.push({top:r.top,bottom:r.bottom,left:r.left,right:r.right,element:mark.element});
+    }
+    rectangles.sort((a,b)=>a.top-b.top||a.left-b.left);
+    const merged=[];
+    for(const box of rectangles){
+      const last=merged[merged.length-1];
+      // Only join consecutive boxes with comparable horizontal spans and a
+      // small vertical gap. A gap left by an unselected reply is not merged.
+      const near=last&&box.top>=last.bottom-5&&box.top-last.bottom<=16;
+      const aligned=last&&Math.abs(box.left-last.left)<=24&&Math.abs(box.right-last.right)<=24;
+      if(near&&aligned){
+        last.bottom=Math.max(last.bottom,box.bottom);
+        last.left=Math.min(last.left,box.left);
+        last.right=Math.max(last.right,box.right);
+      }else merged.push({top:box.top,bottom:box.bottom,left:box.left,right:box.right});
+    }
+    highlightLayer.replaceChildren();
+    for(const r of merged){
+      const div=document.createElement('div');
+      div.className='zce-highlight-outline';
+      const x=Math.max(0,r.left+2),y=Math.max(0,r.top+2);
+      const right=Math.min(innerWidth,r.right-2),bottom=Math.min(innerHeight,r.bottom-2);
+      if(right<=x||bottom<=y)continue;
+      div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${bottom-y}px`;
+      highlightLayer.appendChild(div);
     }
   }
+  function updatePageHighlights(){
+    // Undo older beta marks without manipulating the layout of reply wrappers.
+    for(const [key,mark] of responseMarks){
+      if(!mark.element.isConnected){responseMarks.delete(key);continue;}
+      mark.element.classList.remove('zce-site-selected');
+    }
+    scheduleHighlights();
+  }
+  window.addEventListener('scroll',scheduleHighlights,true);
+  window.addEventListener('resize',scheduleHighlights);
   function selectedResponseCount(){
     if(groupMode==='message'){
       return displayGroups().filter(g=>g.parts.some(p=>chosen.has(p.id))).length;
@@ -647,6 +706,7 @@
     document.documentElement.classList.toggle('zce-select-mode',selectionMode);
     if(!selectionMode){
       for(const {element} of responseMarks.values())element.classList.remove('zce-site-selected');
+      clearHighlightLayer();
       responseMarks.clear();
       pageMarked.clear();
     }
@@ -672,11 +732,9 @@
     const shouldAdd=ids.some(id=>!chosen.has(id));
     ids.forEach(id=>shouldAdd?chosen.add(id):chosen.delete(id));
     const key=responseKey(match.items);
-    const existing=responseMarks.get(key);
-    if(existing&&existing.element!==match.element)existing.element.classList.remove('zce-site-selected');
     responseMarks.set(key,{element:match.element,ids});
     updatePageHighlights();update();
-    flashTip(`${shouldAdd?'선택 완료':'선택 해제'} · 선택 응답 ${selectedResponseCount()}개`);
+    flashTip(`${shouldAdd?'선택 완료':'선택 해제'} · 선택 ${groupMode==='turn'?'응답':'메시지'} ${selectedResponseCount()}개`);
   }
   document.addEventListener('click',onPageClick,true);
   function update(){
@@ -696,7 +754,7 @@
     modeButton.dataset.on=selectionMode?'true':'false';
     launch.classList.toggle('zce-mode-on',selectionMode);
     launchLabel.textContent=selectionMode?'대화 저장 · 선택 중':'대화 저장';
-    launchCount.textContent=`선택 응답 ${selectedResponseCount()}개`;
+    launchCount.textContent=`선택 ${groupMode==='turn'?'응답':'메시지'} ${selectedResponseCount()}개`;
     launchCount.hidden=!selectionMode;
     launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 ${chosen.size}개 선택됨`:'대화 저장');
     if(!list.hidden)renderList();
@@ -812,10 +870,8 @@
       #zce-panel summary{cursor:pointer;font-weight:700}
       #zce-panel .zce-size-control{margin:9px 0}
       #zce-panel .zce-size-control input[type="range"]{display:block;width:100%;margin-top:6px;accent-color:#52c58b}
-      /* Only paint the existing response box. Never override position or
-         attach an absolutely positioned pseudo-element: Zeta uses positioned
-         and virtualized rows, and those changes can create giant blank gaps. */
-      html.zce-select-mode .zce-site-selected{outline:2px solid #49ce88!important;outline-offset:-3px!important;border-radius:12px!important;box-shadow:inset 0 0 0 1px rgba(73,206,136,.18)!important}
+      #zce-highlight-layer{position:fixed;inset:0;z-index:2147483643;pointer-events:none;overflow:hidden;contain:layout style paint}
+      #zce-highlight-layer .zce-highlight-outline{position:absolute;pointer-events:none;border:3px solid #49ce88;border-radius:19px;box-sizing:border-box;background:rgba(73,206,136,.025)}
       #zce-tip{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:#263a30;color:white;border:1px solid #6ad39b;border-radius:10px;padding:8px 12px;max-width:min(340px,calc(100vw - 20px));font:12px/1.4 system-ui;text-align:center;pointer-events:none}
     `;
     (document.head||document.documentElement).appendChild(style);
