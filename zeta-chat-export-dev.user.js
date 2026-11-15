@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.7
+// @version      1.1.8-beta.8
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.7';
+  const VERSION = '1.1.8-beta.8';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -178,58 +178,58 @@
       update();
     }
   }
-  // A turn is completed by ONE independent CHARACTER API response.
-  // Consecutive USER API messages belong to the following CHARACTER response;
-  // each new CHARACTER messageId completes its own turn, even without a USER.
-  // Multiple contents/speaker lines under one messageId are a single response.
-  // Trailing USER messages without a CHARACTER response remain an incomplete turn.
+  // The opening scene (all CHARACTER responses before the first USER) is
+  // always exactly one introductory turn. Once the first USER appears, each
+  // independent CHARACTER message completes a new turn; consecutive USER
+  // messages belong to the next CHARACTER. Trailing USER input is incomplete.
+  // A message's multiple contents, including narrator/character speech,
+  // remain one response because they share messageId.
   function buildTurns(parts){
-    const result=[],pendingUsers=[];
-    let lastId=null, currentResponse=null;
-    function createTurn(id,role){
-      return {id:'turn-'+id,unpaired:role!=='user'&&!pendingUsers.length,
-        incomplete:false,parts:[],user:[],character:[]};
+    const result=[], pendingUsers=[];
+    const firstUserIndex=parts.findIndex(p=>p.role==='user');
+    const introEnd=firstUserIndex<0?parts.length:firstUserIndex;
+    if(introEnd>0){
+      const opening=parts.slice(0,introEnd);
+      const first=opening[0];
+      result.push({
+        id:'opening-'+String(first.messageId||first.id),
+        unpaired:true,incomplete:false,isIntro:true,
+        parts:opening,user:[],character:opening.slice()
+      });
     }
-    for(const part of parts){
+    let current=null,lastId=null;
+    for(const part of parts.slice(introEnd)){
       const id=String(part.messageId||part.id);
-      const role=part.role==='user'?'user':'character';
-      if(id!==lastId){
-        if(role==='user'){
-          currentResponse=null;
-        }else{
-          const turn=createTurn(id,role);
-          for(const userPart of pendingUsers){turn.parts.push(userPart);turn.user.push(userPart);}
-          pendingUsers.length=0;
-          result.push(turn);
-          currentResponse=turn;
-        }
-        lastId=id;
-      }
-      if(role==='user'){
+      if(part.role==='user'){
         pendingUsers.push(part);
+        current=null;
       }else{
-        // Normally same-messageId contents follow the same response. Defend
-        // against mixed or reordered content without merging separate replies.
-        if(!currentResponse){
-          currentResponse=createTurn(id,role);
-          for(const userPart of pendingUsers){currentResponse.parts.push(userPart);currentResponse.user.push(userPart);}
-          pendingUsers.length=0;
-          result.push(currentResponse);
+        if(id!==lastId||!current){
+          current={
+            id:'turn-'+id,unpaired:!pendingUsers.length,
+            incomplete:false,isIntro:false,
+            parts:pendingUsers.splice(0),user:[],character:[]
+          };
+          current.user=current.parts.slice();
+          result.push(current);
         }
-        currentResponse.parts.push(part);
-        currentResponse.character.push(part);
+        current.character.push(part);
+        current.parts.push(part);
       }
+      lastId=id;
     }
     if(pendingUsers.length){
-      const incomplete=createTurn(String(pendingUsers[0].messageId||pendingUsers[0].id),'user');
-      incomplete.incomplete=true;
-      for(const part of pendingUsers){incomplete.parts.push(part);incomplete.user.push(part);}
-      result.push(incomplete);
+      const first=pendingUsers[0];
+      result.push({
+        id:'incomplete-'+String(first.messageId||first.id),
+        unpaired:false,incomplete:true,isIntro:false,
+        parts:pendingUsers.slice(),user:pendingUsers.slice(),character:[]
+      });
     }
     return result;
   }
   function displayGroups(){
-    if(groupMode==='turn')return turns.map(t=>({id:t.id,parts:t.parts,label:(t.incomplete?'미완성 턴':'턴')}));
+    if(groupMode==='turn')return turns.map(t=>({id:t.id,parts:t.parts,label:(t.incomplete?'미완성 턴':t.isIntro?'인트로':'턴')}));
     const groups=[],byId=new Map();
     for(const part of messages){
       const id=String(part.messageId||part.id);
@@ -250,7 +250,7 @@
     chosen=savedChoices[next];
     expanded.clear();previewLimit=40;
     update();
-    setInfo(groupMode==='turn'?'턴 단위로 선택합니다. 말풍선 직접 선택에서는 사용자·캐릭터 응답을 따로 선택할 수 있습니다.':'원본 메시지 단위로 선택합니다.');
+    setInfo(groupMode==='turn'?'턴 단위로 선택합니다. 말풍선 하나를 누르면 해당 턴 전체가 선택됩니다.':'원본 메시지 단위로 선택합니다.');
   }
   function setInfo(s){info=s;update();}
   function selectedRows(){return messages.filter(m=>chosen.has(m.id));}
@@ -666,28 +666,55 @@
     }
     const visibleTop=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
     highlightLayer.style.clipPath=`inset(${visibleTop}px 0px 0px 0px)`;
+    // Inspect only actual Zeta message rows, not the virtualized chat's
+    // container. This gives every visible part of a selected turn a box on
+    // the FIRST tap, even when the tap occurred in only one of its replies.
+    const wrappers=[...document.querySelectorAll('[data-index]')].filter(el=>
+      !el.closest('#zce-panel,#zce-highlight-layer') &&
+      !el.querySelector('[data-index]'));
+    const visible=wrappers.map(el=>{
+      const rect=el.getBoundingClientRect();
+      if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)return null;
+      return {el,rect,text:norm(el.innerText||el.textContent||'')};
+    }).filter(Boolean);
+    const groups=displayGroups().filter(g=>g.parts.length&&g.parts.some(p=>chosen.has(p.id)));
     const rectangles=[];
-    for(const [key,mark] of responseMarks){
-      if(!mark.element.isConnected){responseMarks.delete(key);continue;}
-      if(!mark.ids.some(id=>chosen.has(id)))continue;
-      const r=mark.element.getBoundingClientRect();
-      if(r.width<24||r.height<12||r.bottom<=visibleTop||r.top>innerHeight)continue;
-      rectangles.push({top:r.top,bottom:r.bottom,left:r.left,right:r.right,element:mark.element});
+    const usedElements=new Set();
+    for(const group of groups){
+      const chosenParts=group.parts.filter(p=>chosen.has(p.id));
+      const groupRects=[];
+      for(const entry of visible){
+        if(!entry.text||usedElements.has(entry.el))continue;
+        // Prefer a distinctive excerpt, so identical short greetings in
+        // different turns are not accidentally outlined as the same reply.
+        const matched=chosenParts.some(p=>{
+          const body=norm(p.text);
+          if(!body||body.length<7)return false;
+          const excerpt=body.slice(0,Math.min(60,body.length));
+          return entry.text.includes(excerpt);
+        });
+        if(matched){groupRects.push(entry.rect);usedElements.add(entry.el);}
+      }
+      // Preserve the clicked row even if its content is too short to match
+      // unambiguously (e.g. 네, 응, ㅇㅇ).
+      for(const mark of responseMarks.values()){
+        if(!mark.element.isConnected||usedElements.has(mark.element))continue;
+        if(mark.ids.some(id=>chosenParts.some(p=>p.id===id))){
+          groupRects.push(mark.element.getBoundingClientRect());
+          usedElements.add(mark.element);
+        }
+      }
+      if(!groupRects.length)continue;
+      rectangles.push({
+        top:Math.min(...groupRects.map(r=>r.top)),
+        bottom:Math.max(...groupRects.map(r=>r.bottom)),
+        left:Math.min(...groupRects.map(r=>r.left)),
+        right:Math.max(...groupRects.map(r=>r.right))
+      });
     }
-    rectangles.sort((a,b)=>a.top-b.top||a.left-b.left);
-    const merged=[];
-    for(const box of rectangles){
-      const last=merged[merged.length-1];
-      // Only join consecutive boxes with comparable horizontal spans and a
-      // small vertical gap. A gap left by an unselected reply is not merged.
-      const near=last&&box.top>=last.bottom-5&&box.top-last.bottom<=16;
-      const aligned=last&&Math.abs(box.left-last.left)<=24&&Math.abs(box.right-last.right)<=24;
-      if(near&&aligned){
-        last.bottom=Math.max(last.bottom,box.bottom);
-        last.left=Math.min(last.left,box.left);
-        last.right=Math.max(last.right,box.right);
-      }else merged.push({top:box.top,bottom:box.bottom,left:box.left,right:box.right});
-    }
+    // Each selected turn gets exactly one visual border. For message mode,
+    // each original message has its own border even if adjacent.
+    const merged=rectangles;
     highlightLayer.replaceChildren();
     for(const r of merged){
       const div=document.createElement('div');
@@ -766,7 +793,7 @@
     launchLabel.textContent=selectionMode?'대화 저장 · 선택 중':'대화 저장';
     launchCount.textContent=`선택 ${directSelectionLabel()} ${selectedDirectCount()}개`;
     launchCount.hidden=!selectionMode;
-    launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 ${chosen.size}개 선택됨`:'대화 저장');
+    launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 선택 ${directSelectionLabel()} ${selectedDirectCount()}개`:'대화 저장');
     if(!list.hidden)renderList();
     updatePageHighlights();
   }
@@ -783,7 +810,7 @@
       card.setAttribute('aria-checked',selected?'true':partially?'mixed':'false');
       if(partially)card.classList.add('zce-is-chosen');
       const head=document.createElement('div');head.className='zce-card-head';
-      const who=document.createElement('span');who.textContent=`${i+1}${groupMode==='turn'?'턴':'.'}${groupMode==='turn'?' · ': ' '}${groupMode==='turn'?(turns[i]?.incomplete?'미완성 · 사용자':turns[i]?.user.length?'사용자 + 캐릭터':'캐릭터 응답'):(group.parts[0]?.speaker||'메시지')}`;
+      const who=document.createElement('span');who.textContent=`${i+1}${groupMode==='turn'?'턴':'.'}${groupMode==='turn'?' · ': ' '}${groupMode==='turn'?(turns[i]?.isIntro?'인트로':turns[i]?.incomplete?'미완성 · 사용자':turns[i]?.user.length?'사용자 + 캐릭터':'캐릭터 응답'):(group.parts[0]?.speaker||'메시지')}`;
       const check=document.createElement('span');check.textContent=selected?'✓ 선택됨':partially?'◐ 일부 선택':'＋ 선택';
       head.append(who,check);card.appendChild(head);
       const body=document.createElement('div');body.className='zce-card-text';
