@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.5
+// @version      1.1.8-beta.6
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.5';
+  const VERSION = '1.1.8-beta.6';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -574,7 +574,21 @@
   const responseMarks=new Map();
   function responseKey(parts){
     const first=parts[0];
-    return first?String(first.messageId||first.id):'';
+    if(!first)return '';
+    return groupMode==='turn'&&isIntroPart(first)?'opening-response':String(first.messageId||first.id);
+  }
+  // The introductory scene can have several separately stored CHARACTER
+  // messages displayed as one opening response, before the first USER.
+  // Only direct bubble picking uses this opening-response grouping; turn
+  // counting and export continue to use the original independent messages.
+  function introParts(){
+    const firstUser=messages.findIndex(m=>m.role==='user');
+    const before=firstUser<0?messages:messages.slice(0,firstUser);
+    return before.filter(m=>m.role==='character');
+  }
+  function isIntroPart(part){
+    const intro=introParts();
+    return intro.some(m=>m.id===part.id);
   }
   function responseContainer(start,matched){
     const wrapper=start.closest('[data-index]');
@@ -613,11 +627,17 @@
         }
         const ids=new Set(matched.map(m=>String(m.messageId||m.id)));
         if(ids.size===1&&matched.length)found=matched;
+        else if(ids.size>1&&matched.length&&matched.every(isIntroPart)){
+          // Intro paragraphs can span independent message IDs; unlike
+          // ordinary replies this is intentional during direct selection.
+          found=matched;
+        }
       }
       if(!found.length)continue;
+      const isIntro=groupMode==='turn'&&found.every(isIntroPart);
       const id=found[0].messageId;
-      const parts=id?messages.filter(m=>m.messageId===id):[found[0]];
-      possible.push({element:responseContainer(initial,el),items:parts});
+      const parts=isIntro?introParts():(id?messages.filter(m=>m.messageId===id):[found[0]]);
+      possible.push({element:responseContainer(initial,el),items:parts,intro:isIntro});
       // A narrow match is more trustworthy than a broad ancestor matching all
       // visible conversation. Once found, stop before ascending into the chat.
       break;
@@ -639,6 +659,22 @@
       drawResponseHighlights();
     });
   }
+  // Compute the bottom of Zeta's fixed/sticky top navigation, while avoiding
+  // the chat content itself. The overlay is clipped above this edge so its
+  // outlines can never appear on top of the app header.
+  function chatHeaderBottom(){
+    let bottom=0;
+    for(const el of document.querySelectorAll('header,[role="banner"],nav')){
+      if(el.closest('#zce-panel,#zce-launch,#zce-highlight-layer'))continue;
+      const rect=el.getBoundingClientRect();
+      if(rect.top>12||rect.bottom<=0||rect.height>180)continue;
+      const position=getComputedStyle(el).position;
+      if(position==='fixed'||position==='sticky')bottom=Math.max(bottom,rect.bottom);
+    }
+    // Mobile layouts can use anonymous fixed divs rather than header tags.
+    // The safe fallback keeps highlights clear of the browser's top controls.
+    return Math.max(bottom,innerWidth<=768?56:0);
+  }
   function drawResponseHighlights(){
     if(!selectionMode){clearHighlightLayer();return;}
     if(!highlightLayer){
@@ -647,12 +683,14 @@
       highlightLayer.setAttribute('aria-hidden','true');
       document.body.appendChild(highlightLayer);
     }
+    const visibleTop=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
+    highlightLayer.style.clipPath=`inset(${visibleTop}px 0px 0px 0px)`;
     const rectangles=[];
     for(const [key,mark] of responseMarks){
       if(!mark.element.isConnected){responseMarks.delete(key);continue;}
       if(!mark.ids.some(id=>chosen.has(id)))continue;
       const r=mark.element.getBoundingClientRect();
-      if(r.width<24||r.height<12||r.bottom<0||r.top>innerHeight)continue;
+      if(r.width<24||r.height<12||r.bottom<=visibleTop||r.top>innerHeight)continue;
       rectangles.push({top:r.top,bottom:r.bottom,left:r.left,right:r.right,element:mark.element});
     }
     rectangles.sort((a,b)=>a.top-b.top||a.left-b.left);
@@ -695,9 +733,12 @@
       return displayGroups().filter(g=>g.parts.some(p=>chosen.has(p.id))).length;
     }
     let count=0;
+    const intro=introParts(),introSelected=intro.some(m=>chosen.has(m.id));
+    if(introSelected)count++;
     for(const turn of turns){
       if(turn.user.length&&turn.user.some(p=>chosen.has(p.id)))count++;
-      if(turn.character.length&&turn.character.some(p=>chosen.has(p.id)))count++;
+      if(turn.character.length&&turn.character.some(p=>chosen.has(p.id))&&
+        !turn.character.every(p=>isIntroPart(p)))count++;
     }
     return count;
   }
@@ -721,7 +762,7 @@
     if(!match){flashTip('이 말풍선을 연결할 수 없습니다. 창의 대화 카드에서 선택할 수 있어요.');return;}
     e.preventDefault();e.stopPropagation();e.stopImmediatePropagation?.();
     let items=match.items;
-    if(groupMode==='turn'){
+    if(groupMode==='turn'&&!match.intro){
       const turn=turns.find(t=>t.parts.some(p=>match.items.some(x=>x.id===p.id)));
       if(turn){
         const role=match.items[0].role;
