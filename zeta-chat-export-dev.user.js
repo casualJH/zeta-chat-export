@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.1.8-beta.6
+// @version      1.1.8-beta.7
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.1.8-beta.6';
+  const VERSION = '1.1.8-beta.7';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -574,21 +574,7 @@
   const responseMarks=new Map();
   function responseKey(parts){
     const first=parts[0];
-    if(!first)return '';
-    return groupMode==='turn'&&isIntroPart(first)?'opening-response':String(first.messageId||first.id);
-  }
-  // The introductory scene can have several separately stored CHARACTER
-  // messages displayed as one opening response, before the first USER.
-  // Only direct bubble picking uses this opening-response grouping; turn
-  // counting and export continue to use the original independent messages.
-  function introParts(){
-    const firstUser=messages.findIndex(m=>m.role==='user');
-    const before=firstUser<0?messages:messages.slice(0,firstUser);
-    return before.filter(m=>m.role==='character');
-  }
-  function isIntroPart(part){
-    const intro=introParts();
-    return intro.some(m=>m.id===part.id);
+    return first?String(first.messageId||first.id):'';
   }
   function responseContainer(start,matched){
     const wrapper=start.closest('[data-index]');
@@ -627,17 +613,12 @@
         }
         const ids=new Set(matched.map(m=>String(m.messageId||m.id)));
         if(ids.size===1&&matched.length)found=matched;
-        else if(ids.size>1&&matched.length&&matched.every(isIntroPart)){
-          // Intro paragraphs can span independent message IDs; unlike
-          // ordinary replies this is intentional during direct selection.
-          found=matched;
-        }
+
       }
       if(!found.length)continue;
-      const isIntro=groupMode==='turn'&&found.every(isIntroPart);
       const id=found[0].messageId;
-      const parts=isIntro?introParts():(id?messages.filter(m=>m.messageId===id):[found[0]]);
-      possible.push({element:responseContainer(initial,el),items:parts,intro:isIntro});
+      const parts=id?messages.filter(m=>m.messageId===id):[found[0]];
+      possible.push({element:responseContainer(initial,el),items:parts});
       // A narrow match is more trustworthy than a broad ancestor matching all
       // visible conversation. Once found, stop before ascending into the chat.
       break;
@@ -728,19 +709,11 @@
   }
   window.addEventListener('scroll',scheduleHighlights,true);
   window.addEventListener('resize',scheduleHighlights);
-  function selectedResponseCount(){
-    if(groupMode==='message'){
-      return displayGroups().filter(g=>g.parts.some(p=>chosen.has(p.id))).length;
-    }
-    let count=0;
-    const intro=introParts(),introSelected=intro.some(m=>chosen.has(m.id));
-    if(introSelected)count++;
-    for(const turn of turns){
-      if(turn.user.length&&turn.user.some(p=>chosen.has(p.id)))count++;
-      if(turn.character.length&&turn.character.some(p=>chosen.has(p.id))&&
-        !turn.character.every(p=>isIntroPart(p)))count++;
-    }
-    return count;
+  function selectedDirectCount(){
+    return displayGroups().filter(g=>g.parts.some(p=>chosen.has(p.id))).length;
+  }
+  function directSelectionLabel(){
+    return groupMode==='turn'?'턴':'메시지';
   }
   function setSelectionMode(on){
     selectionMode=!!on;
@@ -761,21 +734,17 @@
     const match=matchBubbles(target);
     if(!match){flashTip('이 말풍선을 연결할 수 없습니다. 창의 대화 카드에서 선택할 수 있어요.');return;}
     e.preventDefault();e.stopPropagation();e.stopImmediatePropagation?.();
-    let items=match.items;
-    if(groupMode==='turn'&&!match.intro){
-      const turn=turns.find(t=>t.parts.some(p=>match.items.some(x=>x.id===p.id)));
-      if(turn){
-        const role=match.items[0].role;
-        items=role==='user'?turn.user:turn.character;
-      }
-    }
-    const ids=items.map(m=>m.id);
+    const group=groupMode==='turn'
+      ?turns.find(t=>t.parts.some(p=>match.items.some(x=>x.id===p.id)))
+      :displayGroups().find(g=>g.parts.some(p=>match.items.some(x=>x.id===p.id)));
+    if(!group){flashTip('이 말풍선의 선택 단위를 찾을 수 없습니다.');return;}
+    const ids=group.parts.map(m=>m.id);
     const shouldAdd=ids.some(id=>!chosen.has(id));
     ids.forEach(id=>shouldAdd?chosen.add(id):chosen.delete(id));
     const key=responseKey(match.items);
     responseMarks.set(key,{element:match.element,ids});
     updatePageHighlights();update();
-    flashTip(`${shouldAdd?'선택 완료':'선택 해제'} · 선택 ${groupMode==='turn'?'응답':'메시지'} ${selectedResponseCount()}개`);
+    flashTip(`${shouldAdd?'선택 완료':'선택 해제'} · 선택 ${directSelectionLabel()} ${selectedDirectCount()}개`);
   }
   document.addEventListener('click',onPageClick,true);
   function update(){
@@ -795,7 +764,7 @@
     modeButton.dataset.on=selectionMode?'true':'false';
     launch.classList.toggle('zce-mode-on',selectionMode);
     launchLabel.textContent=selectionMode?'대화 저장 · 선택 중':'대화 저장';
-    launchCount.textContent=`선택 ${groupMode==='turn'?'응답':'메시지'} ${selectedResponseCount()}개`;
+    launchCount.textContent=`선택 ${directSelectionLabel()} ${selectedDirectCount()}개`;
     launchCount.hidden=!selectionMode;
     launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 ${chosen.size}개 선택됨`:'대화 저장');
     if(!list.hidden)renderList();
