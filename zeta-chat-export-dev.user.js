@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.2.0-beta.3
+// @version      1.2.0-beta.4
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.2.0-beta.3';
+  const VERSION = '1.2.0-beta.4';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -722,44 +722,58 @@
       }
     }
     if(groupMode==='message'){
-      // All-selected messages have no directly clicked DOM marks yet. Match
-      // actual message text against visible message rows, rather than outlining
-      // every [data-index] row (which also includes notices and controls).
-      // Only run this discovery when ALL messages are selected: partial
-      // selection continues to use the working direct-click mark renderer.
+      // Full selection can start without a single clicked response mark.
+      // Discover ONLY identifiable actual message bodies; generic [data-index]
+      // nodes can also be notices, headers, toolbars or editor controls.
       if(fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
-        const knownTexts=[...new Set(messages.map(m=>norm(m.text)).filter(Boolean))];
-        const isMessageText=(candidate)=>{
-          if(!candidate)return false;
-          // A single row must contain one recognizable message. Distinct
-          // message bodies occurring together indicate an ancestor wrapper.
-          const hits=knownTexts.filter(body=>{
-            if(body.length>=8)return candidate.includes(body.slice(0,Math.min(55,body.length)));
-            return candidate.includes(body)&&candidate.length<=body.length+16;
-          });
-          if(!hits.length)return false;
-          const different=hits.filter(v=>v!==hits[0]&&!v.includes(hits[0])&&!hits[0].includes(v));
-          return different.length===0;
+        const textBodies=[...new Set(messages.filter(m=>m.kind==='text')
+          .map(m=>norm(m.text)).filter(Boolean))];
+        const matchingBodies=(element)=>{
+          const content=norm(element.innerText||element.textContent||'');
+          if(!content)return [];
+          // Match text regardless of the body being a single markdown paragraph
+          // or a formatted character response with multiple speaker blocks.
+          // Short identical replies are matched on an EXACT leaf text, never
+          // as a substring of a larger control or another reply.
+          const shortLeaves=new Set();
+          if(element.children.length===0)shortLeaves.add(content);
+          for(const leaf of element.querySelectorAll('p,span,div')){
+            if(leaf.children.length!==0)continue;
+            const value=norm(leaf.innerText||leaf.textContent||'');
+            if(value&&value.length<=8)shortLeaves.add(value);
+          }
+          return textBodies.filter(body=>body.length>=8
+            ?content.includes(body.slice(0,Math.min(55,body.length)))
+            :shortLeaves.has(body));
         };
         const rows=[...document.querySelectorAll('[data-index]')]
-          .filter(el=>!el.closest('#zce-panel,#zce-launch,#zce-highlight-layer')&&!el.querySelector('[data-index]'));
+          .filter(el=>!el.closest('#zce-panel,#zce-launch,#zce-highlight-layer')&&
+            !el.querySelector('[data-index]')&&
+            !el.closest('header,nav,footer,[role="banner"]'));
         const rects=[];
-        for(const el of rows){
-          const r=el.getBoundingClientRect();
+        for(const row of rows){
+          // A row containing form controls or site navigation is not an
+          // exported chat message even if it happens to contain matching text.
+          if(row.querySelector('input,textarea,[contenteditable="true"]'))continue;
+          const r=row.getBoundingClientRect();
           if(r.width<24||r.height<12||r.bottom<=visibleTop||r.top>=innerHeight)continue;
-          const bodies=[...el.querySelectorAll('[data-sentry-component="BodyView"]')];
-          const targets=bodies.length?bodies:[el];
-          for(const target of targets){
-            const content=norm(target.innerText||target.textContent||'');
-            if(!isMessageText(content))continue;
-            const rect=target.getBoundingClientRect();
+          const bodyViews=[...row.querySelectorAll('[data-sentry-component="BodyView"]')];
+          const candidates=bodyViews.length?bodyViews:[row];
+          for(const element of candidates){
+            const hits=matchingBodies(element);
+            if(!hits.length)continue;
+            // A broad wrapper containing multiple different replies is not a
+            // valid message boundary. Use per-reply BodyView elements instead.
+            if(!bodyViews.length&&hits.length>1)continue;
+            const rect=element.getBoundingClientRect();
             if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)continue;
             if(rect.height>innerHeight*.85)continue;
+            if(rects.some(v=>Math.abs(v.top-rect.top)<3&&Math.abs(v.bottom-rect.bottom)<3))continue;
             rects.push({left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom});
           }
         }
-        // Keep the existing precise outlines for anything the user has
-        // already clicked, even if its reply is too short to identify safely.
+        // Previously clicked messages are already mapped to an exact DOM
+        // element and stay visible even if their text is very short.
         for(const mark of responseMarks.values()){
           if(!mark.element.isConnected||!mark.ids.some(id=>chosen.has(id)))continue;
           const r=mark.element.getBoundingClientRect();
@@ -772,8 +786,6 @@
         const connected=[];
         for(const box of rects){
           const prev=connected[connected.length-1];
-          // Merge neighbouring actual message boxes only, never large
-          // non-message gaps or unrelated full-height containers.
           if(prev&&box.top>=prev.bottom-6&&box.top-prev.bottom<=20&&
             Math.abs(box.left-prev.left)<=32&&Math.abs(box.right-prev.right)<=32){
             prev.left=Math.min(prev.left,box.left);
