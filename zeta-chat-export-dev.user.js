@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.2.0-beta.5
+// @version      1.2.0-beta.6
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.2.0-beta.5';
+  const VERSION = '1.2.0-beta.6';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -682,18 +682,19 @@
     }
     const visibleTop=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
     highlightLayer.style.clipPath=`inset(${visibleTop}px 0px 0px 0px)`;
-    // The full-row fallback is safe only for the merged TURN outline.
-    // In MESSAGE mode, [data-index] also occurs on notices, controls and
-    // other non-message rows. Its broad fallback falsely outlines those.
-    // Always use the precise direct-match message renderer below instead.
+    // Selecting ALL before bubble mode must highlight all visible replies,
+    // including short/duplicate phrases that cannot be text-matched reliably.
+    // This visual-only path never modifies selection, turns, or export data.
     const fullySelectedGroups=displayGroups();
-    if(groupMode==='turn'&&fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
+    if(fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
       const fullRows=[...document.querySelectorAll('[data-index]')]
         .filter(el=>!el.closest('#zce-panel,#zce-highlight-layer,#zce-launch')&&!el.querySelector('[data-index]'))
         .map(el=>({el,rect:el.getBoundingClientRect()}))
         .filter(({el,rect})=>rect.width>=24&&rect.height>=12&&
           rect.bottom>visibleTop&&rect.top<innerHeight&&
-          (norm(el.innerText||el.textContent||'').length>0||el.querySelector('img,video')));
+          (norm(el.innerText||el.textContent||'').length>0||el.querySelector('img,video'))&&
+          // Zeta's AI-generated-answer notice is not a chat message.
+          !norm(el.innerText||el.textContent||'').includes(norm('답변은 모두 AI가 생성한 내용이에요')));
       if(fullRows.length){
         const addOutline=(left,top,right,bottom)=>{
           const x=Math.max(0,left+2),y=Math.max(0,top+2);
@@ -722,85 +723,6 @@
       }
     }
     if(groupMode==='message'){
-      // Do not use [data-index] here. It includes unrelated app panels and
-      // controls as well as messages, and has caused giant false outlines.
-      // Only Zeta's concrete BodyView blocks, or a directly clicked message,
-      // can create a full-selection highlight. Unidentified content is not
-      // outlined rather than guessing an unrelated DOM area.
-      if(fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
-        const selectedMessages=messages.filter(m=>m.kind==='text'&&chosen.has(m.id));
-        const entries=[...document.querySelectorAll('[data-sentry-component="BodyView"]')]
-          .filter(el=>!el.closest('#zce-panel,#zce-launch,#zce-highlight-layer,header,nav,footer,[role="banner"]'))
-          .filter(el=>!el.querySelector('[data-sentry-component="BodyView"]'))
-          .filter(el=>!el.querySelector('button,input,textarea,select,[contenteditable="true"]'));
-        const candidates=[];
-        for(const element of entries){
-          const rect=element.getBoundingClientRect();
-          if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)continue;
-          // One response must not be represented by a screen-sized wrapper.
-          if(rect.height>=innerHeight*.85)continue;
-          const content=norm(element.innerText||element.textContent||'');
-          if(!content)continue;
-          let matched=null;
-          for(const m of selectedMessages){
-            const body=norm(m.text);
-            if(!body)continue;
-            if(body.length<=8){
-              // Very short lines only match exact body text, not their
-              // occurrence within a broader ancestor or nearby reply.
-              if(content!==body)continue;
-            }else{
-              const sample=body.slice(0,Math.min(60,body.length));
-              if(!content.includes(sample))continue;
-              if(content.length>body.length*1.35+80)continue;
-            }
-            matched=m;
-            break;
-          }
-          if(matched)candidates.push({element,rect,messageId:String(matched.messageId||matched.id)});
-        }
-        // A character response may have multiple BodyView blocks. Keep only
-        // the smallest confirmed body, avoiding ancestor/descendant duplicates.
-        const rectangles=[];
-        for(const candidate of candidates){
-          if(rectangles.some(v=>v.element.contains(candidate.element)))continue;
-          rectangles.push({element:candidate.element,
-            left:candidate.rect.left,right:candidate.rect.right,
-            top:candidate.rect.top,bottom:candidate.rect.bottom});
-        }
-        // Existing click-based marks are more authoritative for very short
-        // replies and are retained if their geometry is not a large wrapper.
-        for(const mark of responseMarks.values()){
-          if(!mark.element.isConnected||!mark.ids.some(id=>chosen.has(id)))continue;
-          const rect=mark.element.getBoundingClientRect();
-          if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)continue;
-          if(rect.height>=innerHeight*.85)continue;
-          if(rectangles.some(v=>v.element===mark.element||v.element.contains(mark.element)||mark.element.contains(v.element)))continue;
-          rectangles.push({element:mark.element,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom});
-        }
-        rectangles.sort((a,b)=>a.top-b.top||a.left-b.left);
-        const connected=[];
-        for(const rect of rectangles){
-          const prev=connected[connected.length-1];
-          if(prev&&rect.top>=prev.bottom-6&&rect.top-prev.bottom<=20&&
-            Math.abs(rect.left-prev.left)<=32&&Math.abs(rect.right-prev.right)<=32){
-            prev.bottom=Math.max(prev.bottom,rect.bottom);
-            prev.left=Math.min(prev.left,rect.left);
-            prev.right=Math.max(prev.right,rect.right);
-          }else connected.push({...rect});
-        }
-        highlightLayer.replaceChildren();
-        for(const rect of connected){
-          const x=Math.max(0,rect.left+2),y=Math.max(0,rect.top+2);
-          const right=Math.min(innerWidth,rect.right-2),bottom=Math.min(innerHeight,rect.bottom-2);
-          if(right<=x||bottom<=y)continue;
-          const div=document.createElement('div');
-          div.className='zce-highlight-outline';
-          div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${bottom-y}px`;
-          highlightLayer.appendChild(div);
-        }
-        return;
-      }
       // Message mode is intentionally strict: do NOT infer a message's
       // rectangle by scanning ancestor text. Such guesses produced enormous
       // boxes crossing several replies. Only directly matched elements may
