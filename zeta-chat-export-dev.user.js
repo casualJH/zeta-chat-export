@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.2.0-beta.2
+// @version      1.2.0-beta.3
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.2.0-beta.2';
+  const VERSION = '1.2.0-beta.3';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -722,6 +722,77 @@
       }
     }
     if(groupMode==='message'){
+      // All-selected messages have no directly clicked DOM marks yet. Match
+      // actual message text against visible message rows, rather than outlining
+      // every [data-index] row (which also includes notices and controls).
+      // Only run this discovery when ALL messages are selected: partial
+      // selection continues to use the working direct-click mark renderer.
+      if(fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
+        const knownTexts=[...new Set(messages.map(m=>norm(m.text)).filter(Boolean))];
+        const isMessageText=(candidate)=>{
+          if(!candidate)return false;
+          // A single row must contain one recognizable message. Distinct
+          // message bodies occurring together indicate an ancestor wrapper.
+          const hits=knownTexts.filter(body=>{
+            if(body.length>=8)return candidate.includes(body.slice(0,Math.min(55,body.length)));
+            return candidate.includes(body)&&candidate.length<=body.length+16;
+          });
+          if(!hits.length)return false;
+          const different=hits.filter(v=>v!==hits[0]&&!v.includes(hits[0])&&!hits[0].includes(v));
+          return different.length===0;
+        };
+        const rows=[...document.querySelectorAll('[data-index]')]
+          .filter(el=>!el.closest('#zce-panel,#zce-launch,#zce-highlight-layer')&&!el.querySelector('[data-index]'));
+        const rects=[];
+        for(const el of rows){
+          const r=el.getBoundingClientRect();
+          if(r.width<24||r.height<12||r.bottom<=visibleTop||r.top>=innerHeight)continue;
+          const bodies=[...el.querySelectorAll('[data-sentry-component="BodyView"]')];
+          const targets=bodies.length?bodies:[el];
+          for(const target of targets){
+            const content=norm(target.innerText||target.textContent||'');
+            if(!isMessageText(content))continue;
+            const rect=target.getBoundingClientRect();
+            if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)continue;
+            if(rect.height>innerHeight*.85)continue;
+            rects.push({left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom});
+          }
+        }
+        // Keep the existing precise outlines for anything the user has
+        // already clicked, even if its reply is too short to identify safely.
+        for(const mark of responseMarks.values()){
+          if(!mark.element.isConnected||!mark.ids.some(id=>chosen.has(id)))continue;
+          const r=mark.element.getBoundingClientRect();
+          if(r.width<24||r.height<12||r.bottom<=visibleTop||r.top>=innerHeight)continue;
+          if(r.height>innerHeight*.85)continue;
+          if(!rects.some(v=>Math.abs(v.top-r.top)<3&&Math.abs(v.bottom-r.bottom)<3))
+            rects.push({left:r.left,right:r.right,top:r.top,bottom:r.bottom});
+        }
+        rects.sort((a,b)=>a.top-b.top||a.left-b.left);
+        const connected=[];
+        for(const box of rects){
+          const prev=connected[connected.length-1];
+          // Merge neighbouring actual message boxes only, never large
+          // non-message gaps or unrelated full-height containers.
+          if(prev&&box.top>=prev.bottom-6&&box.top-prev.bottom<=20&&
+            Math.abs(box.left-prev.left)<=32&&Math.abs(box.right-prev.right)<=32){
+            prev.left=Math.min(prev.left,box.left);
+            prev.right=Math.max(prev.right,box.right);
+            prev.bottom=Math.max(prev.bottom,box.bottom);
+          }else connected.push({...box});
+        }
+        highlightLayer.replaceChildren();
+        for(const r of connected){
+          const x=Math.max(0,r.left+2),y=Math.max(0,r.top+2);
+          const right=Math.min(innerWidth,r.right-2),bottom=Math.min(innerHeight,r.bottom-2);
+          if(right<=x||bottom<=y)continue;
+          const div=document.createElement('div');
+          div.className='zce-highlight-outline';
+          div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${bottom-y}px`;
+          highlightLayer.appendChild(div);
+        }
+        return;
+      }
       // Message mode is intentionally strict: do NOT infer a message's
       // rectangle by scanning ancestor text. Such guesses produced enormous
       // boxes crossing several replies. Only directly matched elements may
