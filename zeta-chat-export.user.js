@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.2.2-beta.3
+// @version      1.2.2-beta.4
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -619,7 +619,13 @@
     try{parentOrigin=new URLSearchParams(location.hash.slice(1)).get('host');}catch(_){return;}
     if(!/^https:\/\/(?:[a-z0-9-]+\.)*zeta-ai\.io$/i.test(parentOrigin||''))return;
     window.addEventListener('message',event=>{
-      if(event.source!==window.parent||event.origin!==parentOrigin||event.data?.channel!==channel||event.data.type!=='state')return;
+      if(event.source!==window.parent||event.origin!==parentOrigin||event.data?.channel!==channel)return;
+      if(event.data.type==='ping'&&event.ports.length===1){
+        event.ports[0].postMessage('pong');
+        event.ports[0].close();
+        return;
+      }
+      if(event.data.type!=='state')return;
       frameState=event.data.state;
       if(frameState?.enabled)scheduleHighlights();
       else clearHighlightLayer();
@@ -762,18 +768,41 @@
     update();
   }
   // Optional Safari site-access guidance.
-  const accessNoticeKey='zeta-chat-export-dev-hide-frame-access';
-  let skipAccessNotice=false;
-  function requestDirectSelection(){
-    try{skipAccessNotice = skipAccessNotice || localStorage.getItem(accessNoticeKey)==='1';}catch(_){}
-    if(skipAccessNotice){startDirectSelection();return;}
-    const dialog=panel.querySelector('#zce-frame-access');
+  function probeChatFrame(frame){
+    const target=frame?.contentWindow;
+    if(!target)return Promise.resolve(false);
+    return new Promise(resolve=>{
+      const probe=new MessageChannel();
+      const timer=setTimeout(()=>finish(false),1800);
+      function finish(connected){
+        clearTimeout(timer);
+        probe.port1.close();
+        resolve(connected);
+      }
+      probe.port1.onmessage=event=>finish(event.data==='pong');
+      try{target.postMessage({channel,type:'ping'},frameOrigin,[probe.port2]);}
+      catch(_){probe.port2.close();finish(false);}
+    });
+  }
+  let checkingFrame=false;
+  async function requestDirectSelection(){
+    if(checkingFrame)return;
+    if(!messages.length){startDirectSelection();return;}
     const frame=chatFrame();
+    if(!frame&&document.querySelector('[aria-label="Chat messages"]')){startDirectSelection();return;}
+    const roomUrl=location.href;
+    const button=panel.querySelector('#zce-select-mode-btn');
+    checkingFrame=true;
+    button.disabled=true;
+    let connected;
+    try{connected=await probeChatFrame(frame);}
+    finally{checkingFrame=false;button.disabled=false;}
+    if(roomUrl!==location.href||panel.hidden)return;
+    if(connected&&chatFrame()===frame){startDirectSelection();return;}
+    const dialog=panel.querySelector('#zce-frame-access');
     const url=frame ? new URL(frame.src) : null;
     dialog.querySelector('a').href=url ? url.origin+url.pathname : frameOrigin;
-    dialog.querySelector('input').checked=false;
-    dialog.addEventListener('close', startDirectSelection, {once:true});
-    dialog.showModal();
+    if(!dialog.open)dialog.showModal();
   }
   function startDirectSelection(){
     if(!messages.length){setInfo('말풍선을 선택하려면 먼저 과거 대화를 불러오세요.');return;}
@@ -972,7 +1001,6 @@
         <p>말풍선 선택이 안 되면 아래 링크를 눌러 새 탭에서 사이트를 여세요.</p>
         <p><a href="https://frame.pingpong.ai" target="_blank" rel="noopener noreferrer" style="color:#9fd5ff;text-decoration:underline">frame.pingpong.ai 열기 ↗</a></p>
         <p>브라우저의 Tampermonkey 메뉴를 열고 <strong>사이트 접근 허용</strong>을 누르세요. 그다음 제타 채팅방으로 돌아와 새로고침하세요.</p>
-        <label><input type="checkbox"> 다시 보지 않기</label>
         <div class="zce-row"><button type="button" data-act="frame-notice-cancel">닫기</button><button type="button" data-act="frame-notice-confirm">확인</button></div>
       </dialog>
       <div class="zce-note">화면 선택 모드에서는 제타 말풍선을 누르면 선택/해제됩니다. 화면에 없는 과거 대화는 아래 카드 목록에서 선택하세요. 말풍선이 연결되지 않을 경우에도 카드 선택은 가능합니다.</div>
@@ -1034,15 +1062,7 @@
         if(selectionMode)setSelectionMode(false);
         else requestDirectSelection();
       }
-      else if(act==='frame-notice-cancel')panel.querySelector('#zce-frame-access').close();
-      else if(act==='frame-notice-confirm'){
-        const dialog=panel.querySelector('#zce-frame-access');
-        if(dialog.querySelector('input').checked){
-          skipAccessNotice=true;
-          try{localStorage.setItem(accessNoticeKey,'1');}catch(_){}
-        }
-        dialog.close();
-      }
+      else if(act==='frame-notice-cancel'||act==='frame-notice-confirm')panel.querySelector('#zce-frame-access').close();
       else if(act==='reset-ui'){ui=defaultUi();saveUi();applyUi();setInfo('모바일 Safari 기본 위치·크기로 복원했습니다.');}
       else if(act==='copy-txt')void copyToClipboard();
       else if(act==='txt'||act==='json')download(act);
