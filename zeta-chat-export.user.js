@@ -1,27 +1,43 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.1.7
-// @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
-// @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
+// @version      1.2.2-beta.1
+// @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export.user.js
+// @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
 // @description  제타 대화·상태창 불러오기, 선택 및 TXT/JSON 내보내기
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
+// @match        https://frame.pingpong.ai/*
 // @run-at       document-start
-// @noframes
 // @grant        none
 // ==/UserScript==
 (function () {
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.1.7';
+  const VERSION = '1.2.1';
+  const frameOrigin='https://frame.pingpong.ai';
+  const channel='zeta-chat-export:selection:1';
+  function isChatFrameUrl(url){
+    return url.origin===frameOrigin && /^\/v\d+\/index\.html$/.test(url.pathname);
+  }
+  const inChatFrame=location.origin===frameOrigin;
+  const messageRowSelector='[data-index][data-key^="message-MESSAGE-"]';
+  const messageBodySelector='[data-sentry-component="BodyView"]';
+  let highlightLayer=null,highlightFrame=0,frameState=null;
+  if(inChatFrame){
+    if(window.parent!==window&&isChatFrameUrl(location))initChatFrame();
+    return;
+  }
+  if(window.parent!==window)return;
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
   let captured = null, roomFromRequest = null, roomPath = null;
-  let messages = [], chosen = new Set(), running = false, aborter = null, stopped = false;
+  let messages = [], turns = [], chosen = new Set(), running = false, aborter = null, stopped = false;
+  let groupMode='turn'; // Default: whole turns; message mode uses original API messages.
+  const savedChoices={turn:new Set(),message:new Set()};
   let selectionMode = false, previewLimit = 40, loadEpoch = 0;
   const expanded = new Set(), pageMarked = new Map();
   let pages = 0, totalRaw = 0, complete = false, info = '채팅방을 열고 대화 불러오기를 누르세요.';
@@ -134,7 +150,7 @@
     if(!captured?.authorization) {setInfo('인증 정보를 아직 확인하지 못했습니다. 채팅방을 새로고침한 뒤 대화가 표시되면 다시 누르세요.');return;}
     if(selectionMode)setSelectionMode(false);
     const epoch=++loadEpoch;
-    running=true;stopped=false;complete=false;pages=0;totalRaw=0;messages=[];chosen.clear();expanded.clear();pageMarked.clear();previewLimit=40;
+    running=true;stopped=false;complete=false;pages=0;totalRaw=0;messages=[];turns=[];chosen.clear();savedChoices.turn.clear();savedChoices.message.clear();expanded.clear();pageMarked.clear();previewLimit=40;
     const headers={...captured}; const seen=new Set(), cursors=new Set(), collected=[];
     let cursor=null, limit=100, note='', throttles=0;
     update();
@@ -160,7 +176,7 @@
         const batch=Array.isArray(data.messages)?data.messages:[];
         if(!batch.length) {complete=true;break;}
         for(const m of batch) {if(!m || typeof m.id!=='string' || seen.has(m.id)) continue;seen.add(m.id);collected.push(m);}
-        pages=p;totalRaw=seen.size;messages=normalize(collected);update();
+        pages=p;totalRaw=seen.size;messages=normalize(collected);turns=buildTurns(messages);update();
         if(!data.nextCursor) {complete=true;break;}
         if(typeof data.nextCursor!=='string' || cursors.has(data.nextCursor)) {note='페이지 커서가 중복되거나 올바르지 않아 중단했습니다.';break;}
         cursors.add(data.nextCursor);cursor=data.nextCursor;
@@ -176,9 +192,89 @@
       update();
     }
   }
+  // The opening scene (all CHARACTER responses before the first USER) is
+  // always exactly one introductory turn. Once the first USER appears, each
+  // independent CHARACTER message completes a new turn; consecutive USER
+  // messages belong to the next CHARACTER. Trailing USER input is incomplete.
+  // A message's multiple contents, including narrator/character speech,
+  // remain one response because they share messageId.
+  function buildTurns(parts){
+    const result=[], pendingUsers=[];
+    const firstUserIndex=parts.findIndex(p=>p.role==='user');
+    const introEnd=firstUserIndex<0?parts.length:firstUserIndex;
+    if(introEnd>0){
+      const opening=parts.slice(0,introEnd);
+      const first=opening[0];
+      result.push({
+        id:'opening-'+String(first.messageId||first.id),
+        unpaired:true,incomplete:false,isIntro:true,
+        parts:opening,user:[],character:opening.slice()
+      });
+    }
+    let current=null,lastId=null;
+    for(const part of parts.slice(introEnd)){
+      const id=String(part.messageId||part.id);
+      if(part.role==='user'){
+        pendingUsers.push(part);
+        current=null;
+      }else{
+        if(id!==lastId||!current){
+          current={
+            id:'turn-'+id,unpaired:!pendingUsers.length,
+            incomplete:false,isIntro:false,
+            parts:pendingUsers.splice(0),user:[],character:[]
+          };
+          current.user=current.parts.slice();
+          result.push(current);
+        }
+        current.character.push(part);
+        current.parts.push(part);
+      }
+      lastId=id;
+    }
+    if(pendingUsers.length){
+      const first=pendingUsers[0];
+      result.push({
+        id:'incomplete-'+String(first.messageId||first.id),
+        unpaired:false,incomplete:true,isIntro:false,
+        parts:pendingUsers.slice(),user:pendingUsers.slice(),character:[]
+      });
+    }
+    return result;
+  }
+  function displayGroups(){
+    if(groupMode==='turn')return turns.map(t=>({id:t.id,parts:t.parts,label:(t.incomplete?'미완성 턴':t.isIntro?'인트로':'턴')}));
+    const groups=[],byId=new Map();
+    for(const part of messages){
+      const id=String(part.messageId||part.id);
+      if(!byId.has(id)){const g={id,parts:[],label:'메시지'};groups.push(g);byId.set(id,g);}
+      byId.get(id).parts.push(part);
+    }
+    return groups;
+  }
+  function addGroup(group){group.parts.forEach(p=>chosen.add(p.id));}
+  function removeGroup(group){group.parts.forEach(p=>chosen.delete(p.id));}
+  function groupSelected(group){return group.parts.length>0&&group.parts.every(p=>chosen.has(p.id));}
+  function selectedGroupCount(){return displayGroups().filter(groupSelected).length;}
+  function switchGroupMode(next){
+    if(next===groupMode||!['turn','message'].includes(next))return;
+    if(selectionMode)setSelectionMode(false);
+    savedChoices[groupMode]=chosen;
+    groupMode=next;
+    chosen=savedChoices[next];
+    expanded.clear();previewLimit=40;
+    update();
+    setInfo(groupMode==='turn'?'턴 단위로 선택합니다. 말풍선 하나를 누르면 해당 턴 전체가 선택됩니다.':'원본 메시지 단위로 선택합니다.');
+  }
   function setInfo(s){info=s;update();}
   function selectedRows(){return messages.filter(m=>chosen.has(m.id));}
-  function pickRecent(n){let count=0;for(let i=messages.length-1;i>=0&&count<n;i--)if(!chosen.has(messages[i].id)){chosen.add(messages[i].id);count++;}update();}
+  function pickRecent(n){
+    let count=0;const groups=displayGroups();
+    for(let i=groups.length-1;i>=0&&count<n;i--){
+      if(!groupSelected(groups[i])){addGroup(groups[i]);count++;}
+    }
+    update();
+  }
   // Only removes COMPLETE fenced blocks. An unclosed fence is kept verbatim to avoid data loss.
   // InfoBox is separate from ordinary code fences so users can independently preserve either type.
   function stripFencedBlocks(text, removeInfoBox, removeOther) {
@@ -481,150 +577,308 @@
     clearTimeout(flashTip.timeout);
     flashTip.timeout=setTimeout(()=>{tip.hidden=true;},2700);
   }
-  function norm(s){
-    // Zeta may render Markdown as formatted HTML, so ignore formatting markers.
-    return String(s||'').normalize('NFC').toLocaleLowerCase()
-      .replace(/[\u200b-\u200f\ufeff]/g,'').replace(/[\s*`~_>#]/g,'');
+  function messageId(row){
+    return row.getAttribute('data-key').slice('message-'.length);
   }
-  function matchBubbles(node){
-    let el=node instanceof Element?node:node?.parentElement;
-    for(let depth=0;el&&el!==document.body&&depth<13;el=el.parentElement,depth++){
-      if(el===panel||el===launch)return null;
-      // Prefer an exact ID match if Zeta exposes the ID on the bubble element.
-      const attr=[el.getAttribute('data-message-id'),el.getAttribute('data-id'),el.id]
-        .find(v=>v&&/MESSAGE-/i.test(v));
-      // Zeta's BodyView / data-index wrapper is the visible message card.
-      const bodyView=el.closest('[data-sentry-component="BodyView"]');
-      const visualRoot=bodyView?(bodyView.closest('[data-index]')||bodyView):el;
-      if(attr){
-        const found=messages.filter(m=>m.messageId&&attr.includes(m.messageId));
-        if(found.length)return {element:visualRoot,items:found};
-      }
+  function messageElements(row){
+    const active=row.querySelector('.swiper-slide-active');
+    if(row.querySelector('.swiper-slide')&&!active)return [];
+    const scope=active||row;
+    const bodies=[...scope.querySelectorAll(messageBodySelector)].filter(body=>body.closest(messageRowSelector)===row);
+    if(bodies.length)return bodies;
+    return active?[active]:row.firstElementChild?[row.firstElementChild]:[];
+  }
+  function clickedMessage(event){
+    const target=event.target instanceof Element?event.target:event.target?.parentElement;
+    if(!target||target.closest('#zce-panel,#zce-launch,#zce-tip,a,button,input,textarea,select,[contenteditable="true"]'))return null;
+    const row=target.closest(messageRowSelector);
+    return row&&messageElements(row).some(element=>element.contains(target))?messageId(row):null;
+  }
+  function selectedMessageState(){
+    const indices=new Map(),selected=new Set(),known=new Set();
+    if(selectionMode&&previous===location.pathname+location.search){
+      displayGroups().forEach((group,index)=>{
+        for(const part of group.parts){
+          if(!part.messageId)continue;
+          known.add(part.messageId);
+          if(chosen.has(part.id)){indices.set(part.messageId,index);selected.add(index);}
+        }
+      });
+    }
+    return {enabled:selectionMode&&known.size>0,groupMode,indices,selected,known};
+  }
+  function chatFrame(){
+    return [...document.querySelectorAll('iframe[title="scene"][src]')]
+      .find(frame=>isChatFrameUrl(new URL(frame.src))) || null;
+  }
+  function syncChatFrame(){
+    chatFrame()?.contentWindow?.postMessage({channel,type:'state',state:selectedMessageState()},frameOrigin);
+  }
+  function initChatFrame(){
+    let parentOrigin;
+    try{parentOrigin=new URLSearchParams(location.hash.slice(1)).get('host');}catch(_){return;}
+    if(!/^https:\/\/(?:[a-z0-9-]+\.)*zeta-ai\.io$/i.test(parentOrigin||''))return;
+    window.addEventListener('message',event=>{
+      if(event.source!==window.parent||event.origin!==parentOrigin||event.data?.channel!==channel||event.data.type!=='state')return;
+      frameState=event.data.state;
+      if(frameState?.enabled)scheduleHighlights();
+      else clearHighlightLayer();
+    });
+    document.addEventListener('click',event=>{
+      if(!frameState?.enabled)return;
+      const id=clickedMessage(event);
+      if(!id||!frameState.known.has(id))return;
+      consumeSelectionClick(event);
+      window.parent.postMessage({channel,type:'toggle',id},parentOrigin);
+    },true);
+    const mountFrame=()=>{
+      const style=document.createElement('style');
+      style.textContent='#zce-highlight-layer{position:fixed;inset:0;z-index:2147483643;pointer-events:none;overflow:hidden}#zce-highlight-layer .zce-highlight-outline{position:absolute;border:3px solid #49ce88;border-radius:19px;box-sizing:border-box;background:rgba(73,206,136,.025)}';
+      document.head.appendChild(style);
+      bindHighlightEvents();
+      observeChatChanges();
+      window.parent.postMessage({channel,type:'ready'},parentOrigin);
+    };
+    if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mountFrame,{once:true});
+    else mountFrame();
+  }
+  function clearHighlightLayer(){
+    if(highlightFrame){cancelAnimationFrame(highlightFrame);highlightFrame=0;}
+    if(highlightLayer){highlightLayer.remove();highlightLayer=null;}
+  }
+  function scheduleHighlights(){
+    if(!(inChatFrame?frameState?.enabled:selectionMode)||highlightFrame)return;
+    highlightFrame=requestAnimationFrame(()=>{
+      highlightFrame=0;
+      drawResponseHighlights();
+    });
+  }
+  // Compute the bottom of Zeta's fixed/sticky top navigation, while avoiding
+  // the chat content itself. The overlay is clipped above this edge so its
+  // outlines can never appear on top of the app header.
+  function chatHeaderBottom(){
+    let bottom=0;
+    for(const el of document.querySelectorAll('header,[role="banner"],nav')){
+      if(el.closest('#zce-panel,#zce-launch,#zce-highlight-layer'))continue;
       const rect=el.getBoundingClientRect();
-      if(rect.width<35||rect.height<14)continue;
-      const content=norm(el.innerText||el.textContent||'');
-      if(content.length<10||content.length>18000)continue;
-      const hits=[];
-      for(const msg of messages){
-        const body=norm(msg.text);
-        if(body.length<10)continue;
-        const a=body.slice(0,Math.min(45,body.length));
-        const b=content.slice(0,Math.min(45,content.length));
-        // When the site hides Markdown, the normalized excerpt still matches.
-        if(content.includes(a)||(content.length>=15&&body.includes(b)))hits.push(msg);
-        if(hits.length>12)break;
-      }
-      if(!hits.length)continue;
-      const groups=new Set(hits.map(m=>m.messageId||m.id));
-      if(groups.size!==1)continue; // A parent containing multiple bubbles isn't selectable.
-      const found=hits[0];
-      const items=found.messageId?messages.filter(m=>m.messageId===found.messageId):[found];
-      return {element:visualRoot,items};
+      if(rect.top>12||rect.bottom<=0||rect.height>180)continue;
+      const position=getComputedStyle(el).position;
+      if(position==='fixed'||position==='sticky')bottom=Math.max(bottom,rect.bottom);
     }
-    return null;
+    // Mobile layouts can use anonymous fixed divs rather than header tags.
+    // The safe fallback keeps highlights clear of the browser's top controls.
+    return Math.max(bottom,innerWidth<=768?56:0);
   }
-  function updatePageHighlights(){
-    for(const [el,ids] of pageMarked){
-      if(!el.isConnected){pageMarked.delete(el);continue;}
-      el.classList.toggle('zce-site-selected',ids.some(id=>chosen.has(id)));
+  function drawResponseHighlights(){
+    const state=inChatFrame?frameState:selectedMessageState();
+    if(!state?.enabled||!document.body){clearHighlightLayer();return;}
+    const {indices,selected,groupMode}=state;
+    if(!highlightLayer){
+      highlightLayer=document.createElement('div');
+      highlightLayer.id='zce-highlight-layer';
+      highlightLayer.setAttribute('aria-hidden','true');
+      document.body.appendChild(highlightLayer);
     }
+    const top=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
+    let bottom=innerHeight;
+    for(const input of document.querySelectorAll('textarea,[contenteditable="true"]')){
+      if(input.closest('#zce-panel,#zce-launch,#zce-tip'))continue;
+      const rect=input.getBoundingClientRect();
+      if(rect.height>0&&rect.top>innerHeight/2&&rect.top<bottom)bottom=rect.top;
+    }
+    highlightLayer.style.clipPath=`inset(${top}px 0px ${innerHeight-bottom}px 0px)`;
+    const boxes=[];
+    for(const row of document.querySelectorAll(messageRowSelector)){
+      const index=indices.get(messageId(row));
+      if(index===undefined)continue;
+      for(const element of messageElements(row)){
+        const rect=element.getBoundingClientRect();
+        if(rect.width<=0||rect.height<=0||rect.bottom<=top||rect.top>=bottom)continue;
+        boxes.push({index,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom});
+      }
+    }
+    boxes.sort((a,b)=>a.index-b.index||a.top-b.top);
+    const outlines=[];
+    for(const box of boxes){
+      const prev=outlines[outlines.length-1];
+      let merge=!!prev;
+      if(merge&&groupMode==='turn'){
+        for(let i=prev.end+1;i<box.index;i++){
+          if(!selected.has(i)){merge=false;break;}
+        }
+      }else if(merge){
+        merge=box.index<=prev.end+1&&box.top>=prev.bottom-8&&box.top-prev.bottom<=24&&
+          Math.abs(box.left-prev.left)<=32&&Math.abs(box.right-prev.right)<=32;
+      }
+      if(!merge){outlines.push({...box,end:box.index});continue;}
+      prev.end=box.index;
+      prev.left=Math.min(prev.left,box.left);
+      prev.right=Math.max(prev.right,box.right);
+      prev.top=Math.min(prev.top,box.top);
+      prev.bottom=Math.max(prev.bottom,box.bottom);
+    }
+    const fragment=document.createDocumentFragment();
+    for(const box of outlines){
+      const x=Math.max(0,box.left+2),y=Math.max(top,box.top+2);
+      const right=Math.min(innerWidth,box.right-2),end=Math.min(bottom,box.bottom-2);
+      if(right<=x||end<=y)continue;
+      const div=document.createElement('div');
+      div.className='zce-highlight-outline';
+      div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${end-y}px`;
+      fragment.appendChild(div);
+    }
+    highlightLayer.replaceChildren(fragment);
+  }
+  function updatePageHighlights(){syncChatFrame();scheduleHighlights();}
+  function bindHighlightEvents(){
+    window.addEventListener('scroll',scheduleHighlights,true);
+    window.addEventListener('resize',scheduleHighlights);
+    window.visualViewport?.addEventListener('resize',scheduleHighlights);
+    window.visualViewport?.addEventListener('scroll',scheduleHighlights);
+  }
+  bindHighlightEvents();
+  function observeChatChanges(){
+    new MutationObserver(records=>{
+      if((inChatFrame?frameState?.enabled:selectionMode)&&records.some(record=>{
+        const element=record.target.nodeType===1?record.target:record.target.parentElement;
+        return element&&!element.closest('#zce-panel,#zce-launch,#zce-tip,#zce-highlight-layer');
+      }))scheduleHighlights();
+    }).observe(document.body,{childList:true,subtree:true,characterData:true,
+      attributes:true,attributeFilter:['data-index','data-key','class']});
+  }
+  function selectedDirectCount(){
+    return displayGroups().filter(g=>g.parts.some(p=>chosen.has(p.id))).length;
+  }
+  function directSelectionLabel(){
+    return groupMode==='turn'?'턴':'메시지';
   }
   function setSelectionMode(on){
     selectionMode=!!on;
     document.documentElement.classList.toggle('zce-select-mode',selectionMode);
     if(!selectionMode){
-      for(const el of pageMarked.keys())el.classList.remove('zce-site-selected');
+      clearHighlightLayer();
       pageMarked.clear();
     }
     update();
   }
-  function onPageClick(e){
-    if(!selectionMode||!messages.length)return;
-    const target=e.target instanceof Element?e.target:e.target?.parentElement;
-    if(!target||target.closest('#zce-panel,#zce-launch,#zce-tip'))return;
-    if(target.closest('a,button,input,textarea,select,[contenteditable="true"]'))return;
-    const match=matchBubbles(target);
-    if(!match){flashTip('이 말풍선을 연결할 수 없습니다. 창의 대화 카드에서 선택할 수 있어요.');return;}
-    e.preventDefault();e.stopPropagation();e.stopImmediatePropagation?.();
-    const ids=match.items.map(m=>m.id);
+  // Optional Safari site-access guidance.
+  const accessNoticeKey='zeta-chat-export-dev-hide-frame-access';
+  let skipAccessNotice=false;
+  function requestDirectSelection(){
+    try{skipAccessNotice = skipAccessNotice || localStorage.getItem(accessNoticeKey)==='1';}catch(_){}
+    if(skipAccessNotice){startDirectSelection();return;}
+    const dialog=panel.querySelector('#zce-frame-access');
+    const frame=chatFrame();
+    const url=frame ? new URL(frame.src) : null;
+    dialog.querySelector('a').href=url ? url.origin+url.pathname : frameOrigin;
+    dialog.querySelector('input').checked=false;
+    dialog.showModal();
+  }
+  function startDirectSelection(){
+    if(!messages.length){setInfo('말풍선을 선택하려면 먼저 과거 대화를 불러오세요.');return;}
+    setSelectionMode(true);
+    panel.hidden=true;
+    flashTip('말풍선을 눌러 선택하세요. 대화 저장 버튼을 눌러 창으로 돌아갈 수 있습니다.');
+  }
+  function consumeSelectionClick(event){
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+  function onPageClick(event){
+    if(!selectionMode||previous!==location.pathname+location.search)return;
+    const id=clickedMessage(event);
+    if(id&&toggleMessage(id))consumeSelectionClick(event);
+  }
+  window.addEventListener('message',event=>{
+    if(event.origin!==frameOrigin||event.source!==chatFrame()?.contentWindow||event.data?.channel!==channel)return;
+    if(event.data.type==='ready'){syncChatFrame();return;}
+    if(event.data.type==='toggle'&&selectionMode&&previous===location.pathname+location.search&&typeof event.data.id==='string'){
+      toggleMessage(event.data.id);
+    }
+  });
+  function toggleMessage(id){
+    const group=displayGroups().find(g=>g.parts.some(part=>part.messageId===id));
+    if(!group){flashTip('이 말풍선의 선택 단위를 찾을 수 없습니다.');return false;}
+    const ids=group.parts.map(m=>m.id);
     const shouldAdd=ids.some(id=>!chosen.has(id));
     ids.forEach(id=>shouldAdd?chosen.add(id):chosen.delete(id));
-    pageMarked.set(match.element,ids);
-    updatePageHighlights();update();
-    flashTip(shouldAdd?`선택 완료 · 현재 총 ${chosen.size}개`:`선택 해제 · 현재 총 ${chosen.size}개`);
+    update();
+    flashTip(`${shouldAdd?'선택 완료':'선택 해제'} · 선택 ${directSelectionLabel()} ${selectedDirectCount()}개`);
+    return true;
   }
   document.addEventListener('click',onPageClick,true);
   function update(){
     if(!panel)return;
     status.textContent=info;
-    summary.querySelector('#zce-collected-count').textContent=String(messages.length);
-    summary.querySelector('#zce-selected-count').textContent=String(chosen.size);
+    const groups=displayGroups();
+    summary.querySelector('#zce-collected-count').textContent=String(groups.length);
+    summary.querySelector('#zce-selected-count').textContent=String(groups.filter(g=>g.parts.some(p=>chosen.has(p.id))).length);
+    summary.querySelector('#zce-collected-label').textContent=groupMode==='turn'?'수집한 턴':'수집한 메시지';
+    summary.querySelector('#zce-selected-label').textContent=groupMode==='turn'?'선택한 턴':'선택한 메시지';
+    panel.querySelectorAll('[data-group-mode]').forEach(b=>{const on=b.dataset.groupMode===groupMode;b.dataset.on=String(on);b.setAttribute('aria-pressed',String(on));});
     panel.querySelector('#zce-load').textContent=running?'수집 중...':'과거 대화 불러오기';
     panel.querySelector('#zce-load').disabled=running;
     panel.querySelector('#zce-stop').disabled=!running;
     const modeButton=panel.querySelector('#zce-select-mode-btn');
-    modeButton.textContent=selectionMode?'화면 말풍선 선택 종료':'화면 말풍선 직접 선택';
+    modeButton.textContent=selectionMode?'말풍선 선택 종료':'말풍선 직접 선택';
     modeButton.dataset.on=selectionMode?'true':'false';
     launch.classList.toggle('zce-mode-on',selectionMode);
     launchLabel.textContent=selectionMode?'대화 저장 · 선택 중':'대화 저장';
-    launchCount.textContent=`선택 ${chosen.size}개`;
+    launchCount.textContent=`선택 ${directSelectionLabel()} ${selectedDirectCount()}개`;
     launchCount.hidden=!selectionMode;
-    launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 ${chosen.size}개 선택됨`:'대화 저장');
+    launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 선택 ${directSelectionLabel()} ${selectedDirectCount()}개`:'대화 저장');
     if(!list.hidden)renderList();
     updatePageHighlights();
   }
   function renderList(){
     if(!list)return;
     list.textContent='';
-    const count=messages.length, start=Math.max(0,count-previewLimit);
+    const groups=displayGroups(),count=groups.length,start=Math.max(0,count-previewLimit);
     const fragment=document.createDocumentFragment();
     for(let i=start;i<count;i++){
-      const m=messages[i], selected=chosen.has(m.id);
+      const group=groups[i], selected=groupSelected(group);
+      const partially=group.parts.some(p=>chosen.has(p.id));
       const card=document.createElement('div');
       card.className='zce-msg-card';card.tabIndex=0;card.setAttribute('role','checkbox');
-      card.setAttribute('aria-checked',String(selected));
-      if(selected)card.classList.add('zce-is-chosen');
+      card.setAttribute('aria-checked',selected?'true':partially?'mixed':'false');
+      if(partially)card.classList.add('zce-is-chosen');
       const head=document.createElement('div');head.className='zce-card-head';
-      const who=document.createElement('span');who.textContent=`${i+1}. ${m.speaker}${m.kind==='info_box'?' · 상태창':''}`;
-      const check=document.createElement('span');check.textContent=selected?'✓ 선택됨':'＋ 선택';
+      const who=document.createElement('span');who.textContent=`${i+1}${groupMode==='turn'?'턴':'.'}${groupMode==='turn'?' · ': ' '}${groupMode==='turn'?(turns[i]?.isIntro?'인트로':turns[i]?.incomplete?'미완성 · 사용자':turns[i]?.user.length?'사용자 + 캐릭터':'캐릭터 응답'):(group.parts[0]?.speaker||'메시지')}`;
+      const check=document.createElement('span');check.textContent=selected?'✓ 선택됨':partially?'◐ 일부 선택':'＋ 선택';
       head.append(who,check);card.appendChild(head);
       const body=document.createElement('div');body.className='zce-card-text';
-      const open=expanded.has(m.id);
-      body.textContent=(!open&&m.text.length>290)?m.text.slice(0,290)+'…':m.text;
+      const full=group.parts.map(p=>`${p.speaker}${p.kind==='info_box'?' · 상태창':''}: ${p.text}`).join('\n\n');
+      const open=expanded.has(group.id);
+      body.textContent=(!open&&full.length>290)?full.slice(0,290)+'…':full;
       card.appendChild(body);
       const actions=document.createElement('div');actions.className='zce-card-actions';
       const reasons=[];
-      if(/ooc\s*:/i.test(m.text))reasons.push('OOC');
-      if(m.text.includes('요약'))reasons.push('요약');
-      if(reasons.length){
-        const label=document.createElement('span');label.className='zce-skip-tag';
-        label.textContent=`감지: ${reasons.join('·')}`;actions.appendChild(label);
-      }
-      if(m.text.length>290){
-        const more=document.createElement('button');more.type='button';more.className='zce-more';
-        more.textContent=open?'접기':'전체 보기';
-        more.addEventListener('click',e=>{e.stopPropagation();open?expanded.delete(m.id):expanded.add(m.id);renderList();});
-        actions.appendChild(more);
+      if(group.parts.some(p=>/ooc\s*:/i.test(p.text)))reasons.push('OOC');
+      if(group.parts.some(p=>p.text.includes('요약')))reasons.push('요약');
+      if(reasons.length){const label=document.createElement('span');label.className='zce-skip-tag';label.textContent=`감지: ${reasons.join('·')}`;actions.appendChild(label);}
+      if(full.length>290){
+        const more=document.createElement('button');more.type='button';more.className='zce-more';more.textContent=open?'접기':'전체 보기';
+        more.addEventListener('click',e=>{e.stopPropagation();open?expanded.delete(group.id):expanded.add(group.id);renderList();});actions.appendChild(more);
       }
       card.appendChild(actions);
-      const toggle=()=>{selected?chosen.delete(m.id):chosen.add(m.id);update();};
+      const toggle=()=>{groupSelected(group)?removeGroup(group):addGroup(group);update();};
       card.addEventListener('click',toggle);
       card.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();toggle();}});
       fragment.appendChild(card);
     }
     list.appendChild(fragment);
     listNote.textContent=count
-      ?`최근 ${count-start}개 표시 / 총 ${count}개 · 카드를 누르면 선택 · 긴 대화는 전체 보기`
+      ?`최근 ${count-start}개 표시 / 총 ${count}${groupMode==='turn'?'턴':'개 메시지'} · 카드를 누르면 선택 · 긴 대화는 전체 보기`
       :'수집된 대화가 없습니다.';
-    const older=panel.querySelector('#zce-more-older');
-    older.hidden=!count||start===0;
+    const older=panel.querySelector('#zce-more-older');older.hidden=!count||start===0;
   }
   function chooseRange(){
+    const groups=displayGroups();
     const a=Number(startInput.value),b=Number(endInput.value);
-    if(!Number.isInteger(a)||!Number.isInteger(b)||a<1||b<1||a>messages.length||b>messages.length){
-      setInfo(`범위는 1~${messages.length} 사이의 번호로 입력하세요.`);return;
+    if(!Number.isInteger(a)||!Number.isInteger(b)||a<1||b<1||a>groups.length||b>groups.length){
+      setInfo(`범위는 1~${groups.length} 사이의 ${groupMode==='turn'?'턴':'메시지'} 번호로 입력하세요.`);return;
     }
-    for(let i=Math.min(a,b)-1;i<Math.max(a,b);i++)chosen.add(messages[i].id);
+    for(let i=Math.min(a,b)-1;i<Math.max(a,b);i++)addGroup(groups[i]);
     update();
   }
   function mount(){
@@ -654,6 +908,10 @@
       #zce-panel .zce-head button{flex:none}
       #zce-panel .zce-drag-label{color:#bdbdc9;font-size:11px;white-space:nowrap}
       #zce-panel .zce-row{display:flex;gap:5px;margin:7px 0;flex-wrap:wrap}
+      #zce-panel .zce-group-heading{font-size:12px;font-weight:700;margin:10px 0 5px}
+      #zce-panel .zce-group-toggle{display:flex;gap:4px;border:1px solid #555b62;border-radius:9px;background:#30303a;padding:4px}
+      #zce-panel .zce-group-toggle button{border:0;background:transparent;color:#c9ccd1;border-radius:6px;min-height:32px}
+      #zce-panel .zce-group-toggle button[data-on="true"]{background:#578a72;color:#fff;border:0}
       #zce-panel .zce-row input:not([type="range"]){flex:1;min-width:50px;width:40px}
       #zce-panel input:not([type="checkbox"]){background:#30303a;border:1px solid #777;border-radius:6px;color:white;padding:7px;font-size:13px}
       #zce-panel .zce-status{white-space:pre-wrap;background:#30303a;border-radius:7px;padding:8px;margin:6px 0}
@@ -682,7 +940,8 @@
       #zce-panel summary{cursor:pointer;font-weight:700}
       #zce-panel .zce-size-control{margin:9px 0}
       #zce-panel .zce-size-control input[type="range"]{display:block;width:100%;margin-top:6px;accent-color:#52c58b}
-      html.zce-select-mode .zce-site-selected{outline:3px solid #49ce88!important;outline-offset:2px!important;border-radius:8px!important}
+      #zce-highlight-layer{position:fixed;inset:0;z-index:2147483643;pointer-events:none;overflow:hidden;contain:layout style paint}
+      #zce-highlight-layer .zce-highlight-outline{position:absolute;pointer-events:none;border:3px solid #49ce88;border-radius:19px;box-sizing:border-box;background:rgba(73,206,136,.025)}
       #zce-tip{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:#263a30;color:white;border:1px solid #6ad39b;border-radius:10px;padding:8px 12px;max-width:min(340px,calc(100vw - 20px));font:12px/1.4 system-ui;text-align:center;pointer-events:none}
     `;
     (document.head||document.documentElement).appendChild(style);
@@ -696,15 +955,25 @@
       <div class="zce-scroll">
       <div class="zce-status" id="zce-info"></div>
       <div class="zce-summary-cards" id="zce-summary" aria-live="polite">
-        <div class="zce-summary-card"><span class="zce-summary-label">수집한 대화</span><strong class="zce-summary-number" id="zce-collected-count">0</strong></div>
-        <div class="zce-summary-card zce-summary-selected"><span class="zce-summary-label">선택한 대화</span><strong class="zce-summary-number" id="zce-selected-count">0</strong></div>
+        <div class="zce-summary-card"><span class="zce-summary-label" id="zce-collected-label">수집한 턴</span><strong class="zce-summary-number" id="zce-collected-count">0</strong></div>
+        <div class="zce-summary-card zce-summary-selected"><span class="zce-summary-label" id="zce-selected-label">선택한 턴</span><strong class="zce-summary-number" id="zce-selected-count">0</strong></div>
       </div>
+      <div class="zce-group-heading">대화 불러오기 방식</div>
+      <div class="zce-group-toggle" role="group" aria-label="대화 불러오기 방식"><button type="button" data-act="group-mode" data-group-mode="turn" data-on="true" aria-pressed="true">턴</button><button type="button" data-act="group-mode" data-group-mode="message" data-on="false" aria-pressed="false">메시지</button></div>
       <div class="zce-row"><button id="zce-load" class="zce-primary-action" data-act="load">과거 대화 불러오기</button><button id="zce-stop" data-act="stop">중지</button></div>
       <div class="zce-note">제타 채팅방에서 과거 대화와 상태창을 함께 불러옵니다. 상태창이 없는 방에서도 그대로 작동합니다. 번호는 오래된 순서부터 매겨집니다.</div>
       <div class="zce-row"><button data-act="recent" data-n="5">최근 5</button><button data-act="recent" data-n="10">최근 10</button><button data-act="recent" data-n="50">최근 50</button><button data-act="recent" data-n="100">최근 100</button></div>
       <div class="zce-row"><button class="zce-select-all" data-act="all">전체 선택</button><button data-act="clear">선택 해제</button></div>
       <div class="zce-row"><input id="zce-start" type="number" min="1" placeholder="시작 번호"><input id="zce-end" type="number" min="1" placeholder="끝 번호"><button data-act="range">범위 추가</button></div>
-      <div class="zce-row"><button data-act="select-mode" id="zce-select-mode-btn">화면 말풍선 직접 선택</button><button data-act="preview">대화 카드 선택 열기/닫기</button></div>
+      <div class="zce-row"><button data-act="select-mode" id="zce-select-mode-btn">말풍선 직접 선택</button><button data-act="preview">대화 카드 선택 열기/닫기</button></div>
+      <dialog id="zce-frame-access" aria-labelledby="zce-frame-access-title" style="max-width:min(320px,90vw);box-sizing:border-box;color:inherit;background:#30303a;border:1px solid #777;border-radius:12px;padding:14px">
+        <strong id="zce-frame-access-title">Tampermonkey 사이트 접근 안내</strong>
+        <p>말풍선 선택이 안 되면 아래 링크를 눌러 새 탭에서 사이트를 여세요.</p>
+        <p><a href="https://frame.pingpong.ai" target="_blank" rel="noopener noreferrer" style="color:#9fd5ff;text-decoration:underline">frame.pingpong.ai 열기 ↗</a></p>
+        <p>새 탭에서 Safari의 Tampermonkey 메뉴를 열고 <strong>사이트 접근 허용</strong>을 누르세요. 그다음 제타 채팅방으로 돌아와 새로고침하세요.</p>
+        <label><input type="checkbox"> 다시 보지 않기</label>
+        <div class="zce-row"><button type="button" data-act="frame-notice-cancel">닫기</button><button type="button" data-act="frame-notice-confirm">확인</button></div>
+      </dialog>
       <div class="zce-note">화면 선택 모드에서는 제타 말풍선을 누르면 선택/해제됩니다. 화면에 없는 과거 대화는 아래 카드 목록에서 선택하세요. 말풍선이 연결되지 않을 경우에도 카드 선택은 가능합니다.</div>
       <div class="zce-note" id="zce-list-note"></div>
       <div class="zce-preview" id="zce-list" hidden></div>
@@ -751,23 +1020,34 @@
       const b=e.target.closest('button[data-act]');if(!b)return;
       const act=b.dataset.act;
       if(act==='close')panel.hidden=true;
+      else if(act==='group-mode')switchGroupMode(b.dataset.groupMode);
       else if(act==='load')load();
       else if(act==='stop'){stopped=true;aborter?.abort();}
       else if(act==='recent')pickRecent(Number(b.dataset.n));
-      else if(act==='all'){messages.forEach(m=>chosen.add(m.id));update();}
+      else if(act==='all'){displayGroups().forEach(addGroup);update();}
       else if(act==='clear'){chosen.clear();update();}
       else if(act==='range')chooseRange();
       else if(act==='preview'){list.hidden=!list.hidden;update();}
       else if(act==='more-older'){previewLimit+=40;update();}
       else if(act==='select-mode'){
-        if(!selectionMode&&!messages.length){setInfo('말풍선을 선택하려면 먼저 과거 대화를 불러오세요.');return;}
-        setSelectionMode(!selectionMode);
-        if(selectionMode){panel.hidden=true;flashTip('말풍선을 눌러 선택하세요. 대화 저장 버튼을 눌러 창으로 돌아갈 수 있습니다.');}
+        if(selectionMode)setSelectionMode(false);
+        else requestDirectSelection();
+      }
+      else if(act==='frame-notice-cancel')panel.querySelector('#zce-frame-access').close();
+      else if(act==='frame-notice-confirm'){
+        const dialog=panel.querySelector('#zce-frame-access');
+        if(dialog.querySelector('input').checked){
+          skipAccessNotice=true;
+          try{localStorage.setItem(accessNoticeKey,'1');}catch(_){}
+        }
+        dialog.close();
+        startDirectSelection();
       }
       else if(act==='reset-ui'){ui=defaultUi();saveUi();applyUi();setInfo('모바일 Safari 기본 위치·크기로 복원했습니다.');}
       else if(act==='copy-txt')void copyToClipboard();
       else if(act==='txt'||act==='json')download(act);
     });
+    observeChatChanges();
     applyUi();update();
   }
   let previous=location.pathname+location.search;
@@ -777,7 +1057,7 @@
     if(previous!==current){
       previous=current;loadEpoch++;stopped=true;aborter?.abort();
       setSelectionMode(false);
-      messages=[];chosen.clear();expanded.clear();pageMarked.clear();
+      messages=[];turns=[];chosen.clear();savedChoices.turn.clear();savedChoices.message.clear();expanded.clear();pageMarked.clear();
       previewLimit=40;pages=0;totalRaw=0;complete=false;
       setInfo('채팅방이 바뀌었습니다. 다시 대화를 불러오세요.');
     }
