@@ -1,15 +1,15 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.2.1
+// @version      1.2.2
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
 // @description  제타 대화·상태창 불러오기, 선택 및 TXT/JSON 내보내기
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
+// @match        https://frame.pingpong.ai/*
 // @run-at       document-start
-// @match        https://frame.pingpong.ai/v1/index.html*
 // @grant        none
 // ==/UserScript==
 (function () {
@@ -19,12 +19,15 @@
   const VERSION = '1.2.1';
   const frameOrigin='https://frame.pingpong.ai';
   const channel='zeta-chat-export:selection:1';
+  function isChatFrameUrl(url){
+    return url.origin===frameOrigin && /^\/v\d+\/index\.html$/.test(url.pathname);
+  }
   const inChatFrame=location.origin===frameOrigin;
   const messageRowSelector='[data-index][data-key^="message-MESSAGE-"]';
   const messageBodySelector='[data-sentry-component="BodyView"]';
   let highlightLayer=null,highlightFrame=0,frameState=null;
   if(inChatFrame){
-    if(window.parent!==window&&location.pathname==='/v1/index.html')initChatFrame();
+    if(window.parent!==window&&isChatFrameUrl(location))initChatFrame();
     return;
   }
   if(window.parent!==window)return;
@@ -605,7 +608,8 @@
     return {enabled:selectionMode&&known.size>0,groupMode,indices,selected,known};
   }
   function chatFrame(){
-    return document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/v1/index.html"]');
+    return [...document.querySelectorAll('iframe[title="scene"][src]')]
+      .find(frame=>isChatFrameUrl(new URL(frame.src))) || null;
   }
   function syncChatFrame(){
     chatFrame()?.contentWindow?.postMessage({channel,type:'state',state:selectedMessageState()},frameOrigin);
@@ -615,7 +619,13 @@
     try{parentOrigin=new URLSearchParams(location.hash.slice(1)).get('host');}catch(_){return;}
     if(!/^https:\/\/(?:[a-z0-9-]+\.)*zeta-ai\.io$/i.test(parentOrigin||''))return;
     window.addEventListener('message',event=>{
-      if(event.source!==window.parent||event.origin!==parentOrigin||event.data?.channel!==channel||event.data.type!=='state')return;
+      if(event.source!==window.parent||event.origin!==parentOrigin||event.data?.channel!==channel)return;
+      if(event.data.type==='ping'&&event.ports.length===1){
+        event.ports[0].postMessage('pong');
+        event.ports[0].close();
+        return;
+      }
+      if(event.data.type!=='state')return;
       frameState=event.data.state;
       if(frameState?.enabled)scheduleHighlights();
       else clearHighlightLayer();
@@ -758,14 +768,41 @@
     update();
   }
   // Optional Safari site-access guidance.
-  const accessNoticeKey='zeta-chat-export-dev-hide-frame-access';
-  let skipAccessNotice=false;
-  function requestDirectSelection(){
-    try{skipAccessNotice ||= localStorage.getItem(accessNoticeKey)==='1';}catch(_){}
-    if(skipAccessNotice){startDirectSelection();return;}
+  function probeChatFrame(frame){
+    const target=frame?.contentWindow;
+    if(!target)return Promise.resolve(false);
+    return new Promise(resolve=>{
+      const probe=new MessageChannel();
+      const timer=setTimeout(()=>finish(false),1800);
+      function finish(connected){
+        clearTimeout(timer);
+        probe.port1.close();
+        resolve(connected);
+      }
+      probe.port1.onmessage=event=>finish(event.data==='pong');
+      try{target.postMessage({channel,type:'ping'},frameOrigin,[probe.port2]);}
+      catch(_){probe.port2.close();finish(false);}
+    });
+  }
+  let checkingFrame=false;
+  async function requestDirectSelection(){
+    if(checkingFrame)return;
+    if(!messages.length){startDirectSelection();return;}
+    const frame=chatFrame();
+    if(!frame&&document.querySelector('[aria-label="Chat messages"]')){startDirectSelection();return;}
+    const roomUrl=location.href;
+    const button=panel.querySelector('#zce-select-mode-btn');
+    checkingFrame=true;
+    button.disabled=true;
+    let connected;
+    try{connected=await probeChatFrame(frame);}
+    finally{checkingFrame=false;button.disabled=false;}
+    if(roomUrl!==location.href||panel.hidden)return;
+    if(connected&&chatFrame()===frame){startDirectSelection();return;}
     const dialog=panel.querySelector('#zce-frame-access');
-    dialog.querySelector('input').checked=false;
-    dialog.showModal();
+    const url=frame ? new URL(frame.src) : null;
+    dialog.querySelector('a').href=url ? url.origin+url.pathname : frameOrigin;
+    if(!dialog.open)dialog.showModal();
   }
   function startDirectSelection(){
     if(!messages.length){setInfo('말풍선을 선택하려면 먼저 과거 대화를 불러오세요.');return;}
@@ -959,12 +996,11 @@
       <div class="zce-row"><button class="zce-select-all" data-act="all">전체 선택</button><button data-act="clear">선택 해제</button></div>
       <div class="zce-row"><input id="zce-start" type="number" min="1" placeholder="시작 번호"><input id="zce-end" type="number" min="1" placeholder="끝 번호"><button data-act="range">범위 추가</button></div>
       <div class="zce-row"><button data-act="select-mode" id="zce-select-mode-btn">말풍선 직접 선택</button><button data-act="preview">대화 카드 선택 열기/닫기</button></div>
-      <dialog id="zce-frame-access" aria-labelledby="zce-frame-access-title" style="max-width:min(320px,90vw);box-sizing:border-box;color:inherit;background:#30303a;border:1px solid #777;border-radius:12px;padding:14px">
+      <dialog id="zce-frame-access" aria-labelledby="zce-frame-access-title" style="position:fixed;inset:0;margin:auto;width:min(320px,90vw);height:fit-content;max-height:85vh;overflow:auto;box-sizing:border-box;color:inherit;background:#30303a;border:1px solid #777;border-radius:12px;padding:14px">
         <strong id="zce-frame-access-title">Tampermonkey 사이트 접근 안내</strong>
-        <p>말풍선 선택이 안 되면 아래 링크를 눌러 새 탭에서 사이트를 여세요.</p>
-        <p><a href="https://frame.pingpong.ai/v1/index.html" target="_blank" rel="noopener noreferrer" style="color:#9fd5ff;text-decoration:underline">frame.pingpong.ai 열기 ↗</a></p>
-        <p>새 탭에서 Safari의 Tampermonkey 메뉴를 열고 <strong>사이트 접근 허용</strong>을 누르세요. 그다음 제타 채팅방으로 돌아와 새로고침하세요.</p>
-        <label><input type="checkbox"> 다시 보지 않기</label>
+        <p>말풍선을 선택할 수 없습니다.<br>아래 링크를 눌러 새 탭에서 사이트를 여세요.</p>
+        <p><a href="https://frame.pingpong.ai" target="_blank" rel="noopener noreferrer" style="color:#9fd5ff;text-decoration:underline">frame.pingpong.ai 열기 ↗</a></p>
+        <p>브라우저의 Tampermonkey 메뉴를 열고 <strong>사이트 접근 허용</strong>을 누르세요. 그다음 제타 채팅방으로 돌아와 새로고침하세요.</p>
         <div class="zce-row"><button type="button" data-act="frame-notice-cancel">닫기</button><button type="button" data-act="frame-notice-confirm">확인</button></div>
       </dialog>
       <div class="zce-note">화면 선택 모드에서는 제타 말풍선을 누르면 선택/해제됩니다. 화면에 없는 과거 대화는 아래 카드 목록에서 선택하세요. 말풍선이 연결되지 않을 경우에도 카드 선택은 가능합니다.</div>
@@ -1026,16 +1062,7 @@
         if(selectionMode)setSelectionMode(false);
         else requestDirectSelection();
       }
-      else if(act==='frame-notice-cancel')panel.querySelector('#zce-frame-access').close();
-      else if(act==='frame-notice-confirm'){
-        const dialog=panel.querySelector('#zce-frame-access');
-        if(dialog.querySelector('input').checked){
-          skipAccessNotice=true;
-          try{localStorage.setItem(accessNoticeKey,'1');}catch(_){}
-        }
-        dialog.close();
-        startDirectSelection();
-      }
+      else if(act==='frame-notice-cancel'||act==='frame-notice-confirm')panel.querySelector('#zce-frame-access').close();
       else if(act==='reset-ui'){ui=defaultUi();saveUi();applyUi();setInfo('모바일 Safari 기본 위치·크기로 복원했습니다.');}
       else if(act==='copy-txt')void copyToClipboard();
       else if(act==='txt'||act==='json')download(act);
