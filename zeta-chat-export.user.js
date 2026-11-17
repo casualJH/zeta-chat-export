@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.2.2-beta.1
+// @version      1.2.2-beta.2
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -772,6 +772,7 @@
     const url=frame ? new URL(frame.src) : null;
     dialog.querySelector('a').href=url ? url.origin+url.pathname : frameOrigin;
     dialog.querySelector('input').checked=false;
+    dialog.addEventListener('close', startDirectSelection, {once:true});
     dialog.showModal();
   }
   function startDirectSelection(){
@@ -966,7 +967,7 @@
       <div class="zce-row"><button class="zce-select-all" data-act="all">전체 선택</button><button data-act="clear">선택 해제</button></div>
       <div class="zce-row"><input id="zce-start" type="number" min="1" placeholder="시작 번호"><input id="zce-end" type="number" min="1" placeholder="끝 번호"><button data-act="range">범위 추가</button></div>
       <div class="zce-row"><button data-act="select-mode" id="zce-select-mode-btn">말풍선 직접 선택</button><button data-act="preview">대화 카드 선택 열기/닫기</button></div>
-      <dialog id="zce-frame-access" aria-labelledby="zce-frame-access-title" style="max-width:min(320px,90vw);box-sizing:border-box;color:inherit;background:#30303a;border:1px solid #777;border-radius:12px;padding:14px">
+      <dialog id="zce-frame-access" aria-labelledby="zce-frame-access-title" style="position:fixed;inset:0;margin:auto;width:min(320px,90vw);height:fit-content;max-height:85vh;overflow:auto;box-sizing:border-box;color:inherit;background:#30303a;border:1px solid #777;border-radius:12px;padding:14px">
         <strong id="zce-frame-access-title">Tampermonkey 사이트 접근 안내</strong>
         <p>말풍선 선택이 안 되면 아래 링크를 눌러 새 탭에서 사이트를 여세요.</p>
         <p><a href="https://frame.pingpong.ai" target="_blank" rel="noopener noreferrer" style="color:#9fd5ff;text-decoration:underline">frame.pingpong.ai 열기 ↗</a></p>
@@ -1041,7 +1042,6 @@
           try{localStorage.setItem(accessNoticeKey,'1');}catch(_){}
         }
         dialog.close();
-        startDirectSelection();
       }
       else if(act==='reset-ui'){ui=defaultUi();saveUi();applyUi();setInfo('모바일 Safari 기본 위치·크기로 복원했습니다.');}
       else if(act==='copy-txt')void copyToClipboard();
