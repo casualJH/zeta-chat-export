@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (DEV)
 // @namespace    zeta-chat-export-dev
-// @version      1.2.0-beta.7
+// @version      1.2.0-beta.6
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExportDev0118) return;
   window.__zetaChatExportDev0118 = true;
-  const VERSION = '1.2.0-beta.7';
+  const VERSION = '1.2.0-beta.6';
   const apiOrigin = 'https://api.zeta-ai.io';
   const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const headerNames = ['authorization','x-client-native-version','x-client-type','x-client-version','x-device-type','x-user-language'];
@@ -568,57 +568,78 @@
     return String(s||'').normalize('NFC').toLocaleLowerCase()
       .replace(/[\u200b-\u200f\ufeff]/g,'').replace(/[\s*`~_>#]/g,'');
   }
-  const bodySelector='[data-sentry-component="BodyView"]';
-  const idSelector='[data-message-id],[data-id],[id^="MESSAGE-"]';
-  const excludedArea='#zce-panel,#zce-launch,#zce-tip,header,nav,footer,form,[role="banner"],[role="toolbar"],[contenteditable="true"]';
-  function mapChatMessages(){
-    const byId=new Map(),byText=new Map();
-    for(const part of messages){
-      const key=String(part.messageId||part.id);
-      if(!byId.has(key))byId.set(key,[]);
-      byId.get(key).push(part);
-      const text=norm(part.text);
-      if(!text)continue;
-      if(!byText.has(text))byText.set(text,new Set());
-      byText.get(text).add(key);
-    }
-    const bindings=new Map();
-    for(const row of document.querySelectorAll('[data-index],'+idSelector)){
-      if(row.closest(excludedArea)||row.querySelector('[data-index],input,textarea,[contenteditable="true"]'))continue;
-      // Nested identifiers in a virtual list belong to its leaf row.
-      if(!row.matches('[data-index]')&&row.closest('[data-index]'))continue;
-      const bodies=[...row.querySelectorAll(bodySelector)].filter(body=>!body.matches(excludedArea)&&!body.closest(excludedArea));
-      if(row.matches(bodySelector))bodies.unshift(row);
-      const keys=new Set();
-      let unknownId=false;
-      for(const node of [row,...row.querySelectorAll(idSelector)]){
-        for(const value of [node.getAttribute('data-message-id'),node.getAttribute('data-id'),node.id]){
-          if(byId.has(value))keys.add(value);
-          else if(value&&/^MESSAGE-/i.test(value))unknownId=true;
-        }
+  // Prefer Zeta's complete response wrapper. A response may contain several
+  // formatted speaker blocks; BodyView alone is too narrow for the desired box.
+  // Keep visual marks indexed by response key, not by a descendant DOM element.
+  const responseMarks=new Map();
+  function responseKey(parts){
+    const first=parts[0];
+    return first?String(first.messageId||first.id):'';
+  }
+  function responseContainer(start,matched){
+    // A turn may span several blocks, but a message highlight must never use
+    // a broad virtualized wrapper containing multiple independent responses.
+    if(groupMode==='message'){
+      const body=start.closest('[data-sentry-component="BodyView"]') ||
+        matched.closest('[data-sentry-component="BodyView"]');
+      if(body)return body;
+      const wrapper=start.closest('[data-index]');
+      if(wrapper&&!wrapper.querySelector('[data-index]')){
+        const text=norm(wrapper.innerText||wrapper.textContent||'');
+        const candidates=messages.filter(m=>{
+          const v=norm(m.text);
+          return v.length>=10&&text.includes(v.slice(0,Math.min(45,v.length)));
+        });
+        if(new Set(candidates.map(m=>String(m.messageId||m.id))).size<=1)return wrapper;
       }
-      if(unknownId||keys.size>1)continue;
-      if(!keys.size){
-        const text=norm(row.innerText||row.textContent||'');
-        if(text.includes(norm('답변은 모두 AI가 생성한 내용이에요')))continue;
-        const nodes=bodies.length?bodies:[row];
-        for(const node of nodes){
-          const ids=byText.get(norm(node.innerText||node.textContent||''));
-          if(ids?.size===1)keys.add(ids.values().next().value);
-        }
-        if(keys.size!==1||nodes.some(node=>{
-          const ids=byText.get(norm(node.innerText||node.textContent||''));
-          return ids?.size!==1||!ids.has(keys.values().next().value);
-        }))continue;
-      }
-      const key=keys.values().next().value;
-      if(bindings.has(key)){bindings.set(key,null);continue;}
-      bindings.set(key,{row,items:byId.get(key),elements:bodies.length?bodies:[row]});
+      return matched;
     }
-    return [...bindings.values()].filter(Boolean);
+    const wrapper=start.closest('[data-index]');
+    if(wrapper&&!wrapper.closest('#zce-panel,#zce-launch'))return wrapper;
+    const body=start.closest('[data-sentry-component="BodyView"]') ||
+      matched.closest('[data-sentry-component="BodyView"]');
+    if(body)return body;
+    return matched;
   }
   function matchBubbles(node){
-    return mapChatMessages().find(binding=>binding.row.contains(node))||null;
+    let el=node instanceof Element?node:node?.parentElement;
+    if(!el)return null;
+    const initial=el;
+    const possible=[];
+    for(let depth=0;el&&el!==document.body&&depth<16;el=el.parentElement,depth++){
+      if(el===panel||el===launch)return null;
+      const attr=[el.getAttribute('data-message-id'),el.getAttribute('data-id'),el.id]
+        .find(v=>v&&/MESSAGE-/i.test(v));
+      let found=[];
+      if(attr)found=messages.filter(m=>m.messageId&&attr.includes(m.messageId));
+      if(!found.length){
+        const rect=el.getBoundingClientRect();
+        if(rect.width<20||rect.height<12)continue;
+        const content=norm(el.innerText||el.textContent||'');
+        if(!content||content.length>18000)continue;
+        const matched=[];
+        for(const m of messages){
+          const body=norm(m.text);if(!body)continue;
+          const sample=body.slice(0,Math.min(55,body.length));
+          // Short replies are common ('네', '응'); only match them if unique
+          // within the candidate response. Do not mark an arbitrary same-text reply.
+          if(content.includes(sample)||(content.length>=2&&body.includes(content)))
+            matched.push(m);
+          if(matched.length>24)break;
+        }
+        const ids=new Set(matched.map(m=>String(m.messageId||m.id)));
+        if(ids.size===1&&matched.length)found=matched;
+
+      }
+      if(!found.length)continue;
+      const id=found[0].messageId;
+      const parts=id?messages.filter(m=>m.messageId===id):[found[0]];
+      possible.push({element:responseContainer(initial,el),items:parts});
+      // A narrow match is more trustworthy than a broad ancestor matching all
+      // visible conversation. Once found, stop before ascending into the chat.
+      break;
+    }
+    return possible[0]||null;
   }
   // Paint outlines in a separate, pointer-transparent viewport overlay.
   // This does not change Zeta's positioned/virtualized message DOM at all.
@@ -652,85 +673,198 @@
     return Math.max(bottom,innerWidth<=768?56:0);
   }
   function drawResponseHighlights(){
-    if(!selectionMode||previous!==location.pathname+location.search){clearHighlightLayer();return;}
+    if(!selectionMode){clearHighlightLayer();return;}
     if(!highlightLayer){
       highlightLayer=document.createElement('div');
       highlightLayer.id='zce-highlight-layer';
       highlightLayer.setAttribute('aria-hidden','true');
       document.body.appendChild(highlightLayer);
     }
-    const top=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
-    let bottom=innerHeight;
-    for(const input of document.querySelectorAll('textarea,[contenteditable="true"]')){
-      if(input.closest('#zce-panel,#zce-launch,#zce-tip'))continue;
-      const rect=input.getBoundingClientRect();
-      if(rect.height>0&&rect.top>innerHeight/2&&rect.top<bottom)bottom=rect.top;
-    }
-    highlightLayer.style.clipPath=`inset(${top}px 0px ${innerHeight-bottom}px 0px)`;
-    const groups=displayGroups();
-    const indices=new Map();
-    const selected=new Set();
-    groups.forEach((group,index)=>{
-      for(const part of group.parts){
-        if(chosen.has(part.id)){indices.set(part.id,index);selected.add(index);}
-      }
-    });
-    const boxes=[];
-    for(const binding of mapChatMessages()){
-      const index=binding.items.map(part=>indices.get(part.id)).find(i=>i!==undefined);
-      if(index===undefined)continue;
-      for(const element of binding.elements){
-        const rect=element.getBoundingClientRect();
-        if(rect.width<=0||rect.height<=0||rect.bottom<=top||rect.top>=bottom)continue;
-        boxes.push({index,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom});
-      }
-    }
-    boxes.sort((a,b)=>a.index-b.index||a.top-b.top);
-    const outlines=[];
-    for(const box of boxes){
-      const prev=outlines[outlines.length-1];
-      let merge=!!prev;
-      if(merge&&groupMode==='turn'){
-        for(let i=prev.end+1;i<box.index;i++){
-          if(!selected.has(i)){merge=false;break;}
+    const visibleTop=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
+    highlightLayer.style.clipPath=`inset(${visibleTop}px 0px 0px 0px)`;
+    // Selecting ALL before bubble mode must highlight all visible replies,
+    // including short/duplicate phrases that cannot be text-matched reliably.
+    // This visual-only path never modifies selection, turns, or export data.
+    const fullySelectedGroups=displayGroups();
+    if(fullySelectedGroups.length&&fullySelectedGroups.every(groupSelected)){
+      const fullRows=[...document.querySelectorAll('[data-index]')]
+        .filter(el=>!el.closest('#zce-panel,#zce-highlight-layer,#zce-launch')&&!el.querySelector('[data-index]'))
+        .map(el=>({el,rect:el.getBoundingClientRect()}))
+        .filter(({el,rect})=>rect.width>=24&&rect.height>=12&&
+          rect.bottom>visibleTop&&rect.top<innerHeight&&
+          (norm(el.innerText||el.textContent||'').length>0||el.querySelector('img,video'))&&
+          // Zeta's AI-generated-answer notice is not a chat message.
+          !norm(el.innerText||el.textContent||'').includes(norm('답변은 모두 AI가 생성한 내용이에요')));
+      if(fullRows.length){
+        const addOutline=(left,top,right,bottom)=>{
+          const x=Math.max(0,left+2),y=Math.max(0,top+2);
+          const toX=Math.min(innerWidth,right-2),toY=Math.min(innerHeight,bottom-2);
+          if(toX<=x||toY<=y)return;
+          const div=document.createElement('div');
+          div.className='zce-highlight-outline';
+          div.style.cssText=`left:${x}px;top:${y}px;width:${toX-x}px;height:${toY-y}px`;
+          highlightLayer.appendChild(div);
+        };
+        highlightLayer.replaceChildren();
+        if(groupMode==='turn'){
+          // One continuous outline covering every visible selected turn.
+          addOutline(
+            Math.min(...fullRows.map(v=>v.rect.left)),
+            Math.min(...fullRows.map(v=>v.rect.top)),
+            Math.max(...fullRows.map(v=>v.rect.right)),
+            Math.max(...fullRows.map(v=>v.rect.bottom))
+          );
+        }else{
+          // Individual message rows remain independent in message mode.
+          for(const {rect} of fullRows)
+            addOutline(rect.left,rect.top,rect.right,rect.bottom);
         }
-      }else if(merge){
-        merge=box.index<=prev.end+1&&box.top>=prev.bottom-8&&box.top-prev.bottom<=24&&
-          Math.abs(box.left-prev.left)<=32&&Math.abs(box.right-prev.right)<=32;
+        return;
       }
-      if(!merge){outlines.push({...box,end:box.index});continue;}
-      prev.end=box.index;
-      prev.left=Math.min(prev.left,box.left);
-      prev.right=Math.max(prev.right,box.right);
-      prev.top=Math.min(prev.top,box.top);
-      prev.bottom=Math.max(prev.bottom,box.bottom);
     }
-    const fragment=document.createDocumentFragment();
-    for(const box of outlines){
-      const x=Math.max(0,box.left+2),y=Math.max(top,box.top+2);
-      const right=Math.min(innerWidth,box.right-2),end=Math.min(bottom,box.bottom-2);
-      if(right<=x||end<=y)continue;
+    if(groupMode==='message'){
+      // Message mode is intentionally strict: do NOT infer a message's
+      // rectangle by scanning ancestor text. Such guesses produced enormous
+      // boxes crossing several replies. Only directly matched elements may
+      // supply a rectangle, and each mark belongs to its exact messageId.
+      const groupList=displayGroups();
+      const keyToIndex=new Map(groupList.map((g,i)=>[String(g.id),i]));
+      const rectangles=[];
+      for(const [key,mark] of responseMarks){
+        if(!mark.element.isConnected){responseMarks.delete(key);continue;}
+        const index=keyToIndex.get(String(key));
+        if(index===undefined||!groupList[index].parts.some(p=>chosen.has(p.id)))continue;
+        const rect=mark.element.getBoundingClientRect();
+        if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)continue;
+        // If a fallback selector reaches a chat-sized container, skip it
+        // instead of marking unrelated content as selected.
+        if(rect.height>innerHeight*0.85 && !mark.element.matches('[data-sentry-component="BodyView"]'))continue;
+        rectangles.push({index,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom});
+      }
+      rectangles.sort((a,b)=>a.index-b.index);
+      const outlines=[];
+      for(const box of rectangles){
+        const prev=outlines[outlines.length-1];
+        const contiguous=prev&&box.index===prev.endIndex+1;
+        const verticallyNear=prev&&box.top>=prev.bottom-8&&box.top-prev.bottom<=24;
+        const horizontallyNear=prev&&Math.abs(box.left-prev.left)<=32&&Math.abs(box.right-prev.right)<=32;
+        if(contiguous&&verticallyNear&&horizontallyNear){
+          prev.left=Math.min(prev.left,box.left);
+          prev.right=Math.max(prev.right,box.right);
+          prev.bottom=Math.max(prev.bottom,box.bottom);
+          prev.endIndex=box.index;
+        }else outlines.push({...box,endIndex:box.index});
+      }
+      highlightLayer.replaceChildren();
+      for(const r of outlines){
+        const x=Math.max(0,r.left+2),y=Math.max(0,r.top+2);
+        const right=Math.min(innerWidth,r.right-2),bottom=Math.min(innerHeight,r.bottom-2);
+        if(right<=x||bottom<=y)continue;
+        const div=document.createElement('div');
+        div.className='zce-highlight-outline';
+        div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${bottom-y}px`;
+        highlightLayer.appendChild(div);
+      }
+      return;
+    }
+    // Turn mode: retain its already-working full-turn highlight behaviour.
+    // Inspect only actual Zeta message rows, not the virtualized chat's
+    // container. This gives every visible part of a selected turn a box on
+    // the FIRST tap, even when the tap occurred in only one of its replies.
+    const wrappers=[...document.querySelectorAll('[data-index]')].filter(el=>
+      !el.closest('#zce-panel,#zce-highlight-layer') &&
+      !el.querySelector('[data-index]'));
+    const visible=wrappers.map(el=>{
+      const rect=el.getBoundingClientRect();
+      if(rect.width<24||rect.height<12||rect.bottom<=visibleTop||rect.top>=innerHeight)return null;
+      return {el,rect,text:norm(el.innerText||el.textContent||'')};
+    }).filter(Boolean);
+    // Preserve every group's original index: visual proximity alone cannot
+    // decide adjacency. An unselected turn must always split the outline.
+    const allGroups=displayGroups();
+    const selectedIndices=[];
+    for(let i=0;i<allGroups.length;i++){
+      const group=allGroups[i];
+      if(group.parts.length&&group.parts.some(p=>chosen.has(p.id)))selectedIndices.push(i);
+    }
+    const rectangles=[];
+    const usedElements=new Set();
+    for(const groupIndex of selectedIndices){
+      const group=allGroups[groupIndex];
+      const chosenParts=group.parts.filter(p=>chosen.has(p.id));
+      const groupRects=[];
+      for(const entry of visible){
+        if(!entry.text||usedElements.has(entry.el))continue;
+        // Prefer a distinctive excerpt, so identical short greetings in
+        // different turns are not accidentally outlined as the same reply.
+        const matched=chosenParts.some(p=>{
+          const body=norm(p.text);
+          if(!body||body.length<7)return false;
+          const excerpt=body.slice(0,Math.min(60,body.length));
+          return entry.text.includes(excerpt);
+        });
+        if(matched){groupRects.push(entry.rect);usedElements.add(entry.el);}
+      }
+      // Preserve the clicked row even if its content is too short to match
+      // unambiguously (e.g. 네, 응, ㅇㅇ).
+      for(const mark of responseMarks.values()){
+        if(!mark.element.isConnected||usedElements.has(mark.element))continue;
+        if(mark.ids.some(id=>chosenParts.some(p=>p.id===id))){
+          groupRects.push(mark.element.getBoundingClientRect());
+          usedElements.add(mark.element);
+        }
+      }
+      if(!groupRects.length)continue;
+      rectangles.push({
+        index:groupIndex,
+        top:Math.min(...groupRects.map(r=>r.top)),
+        bottom:Math.max(...groupRects.map(r=>r.bottom)),
+        left:Math.min(...groupRects.map(r=>r.left)),
+        right:Math.max(...groupRects.map(r=>r.right))
+      });
+    }
+    // Turn mode: merge all consecutive selected turns into ONE outline.
+    // Break a run at every unselected turn, regardless of the pixel distance
+    // between boxes. In message mode each selected message remains separate.
+    const merged=[];
+    const selectedIndexSet=new Set(selectedIndices);
+    for(const rect of rectangles){
+      const prev=merged[merged.length-1];
+      const uninterrupted=groupMode==='turn'&&prev&&
+        rect.index>prev.endIndex&&
+        Array.from({length:rect.index-prev.endIndex-1},
+          (_,offset)=>prev.endIndex+offset+1).every(i=>selectedIndexSet.has(i));
+      if(uninterrupted){
+        prev.left=Math.min(prev.left,rect.left);
+        prev.right=Math.max(prev.right,rect.right);
+        prev.top=Math.min(prev.top,rect.top);
+        prev.bottom=Math.max(prev.bottom,rect.bottom);
+        prev.endIndex=rect.index;
+      }else{
+        merged.push({...rect,endIndex:rect.index});
+      }
+    }
+    highlightLayer.replaceChildren();
+    for(const r of merged){
       const div=document.createElement('div');
       div.className='zce-highlight-outline';
-      div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${end-y}px`;
-      fragment.appendChild(div);
+      const x=Math.max(0,r.left+2),y=Math.max(0,r.top+2);
+      const right=Math.min(innerWidth,r.right-2),bottom=Math.min(innerHeight,r.bottom-2);
+      if(right<=x||bottom<=y)continue;
+      div.style.cssText=`left:${x}px;top:${y}px;width:${right-x}px;height:${bottom-y}px`;
+      highlightLayer.appendChild(div);
     }
-    highlightLayer.replaceChildren(fragment);
   }
-  function updatePageHighlights(){scheduleHighlights();}
+  function updatePageHighlights(){
+    // Undo older beta marks without manipulating the layout of reply wrappers.
+    for(const [key,mark] of responseMarks){
+      if(!mark.element.isConnected){responseMarks.delete(key);continue;}
+      mark.element.classList.remove('zce-site-selected');
+    }
+    scheduleHighlights();
+  }
   window.addEventListener('scroll',scheduleHighlights,true);
   window.addEventListener('resize',scheduleHighlights);
-  window.visualViewport?.addEventListener('resize',scheduleHighlights);
-  window.visualViewport?.addEventListener('scroll',scheduleHighlights);
-  function observeChatChanges(){
-    new MutationObserver(records=>{
-      if(selectionMode&&records.some(record=>{
-        const element=record.target.nodeType===1?record.target:record.target.parentElement;
-        return element&&!element.closest('#zce-panel,#zce-launch,#zce-tip,#zce-highlight-layer');
-      }))scheduleHighlights();
-    }).observe(document.body,{childList:true,subtree:true,characterData:true,
-      attributes:true,attributeFilter:['data-index','data-message-id','data-id','id']});
-  }
   function selectedDirectCount(){
     return displayGroups().filter(g=>g.parts.some(p=>chosen.has(p.id))).length;
   }
@@ -741,13 +875,15 @@
     selectionMode=!!on;
     document.documentElement.classList.toggle('zce-select-mode',selectionMode);
     if(!selectionMode){
+      for(const {element} of responseMarks.values())element.classList.remove('zce-site-selected');
       clearHighlightLayer();
+      responseMarks.clear();
       pageMarked.clear();
     }
     update();
   }
   function onPageClick(e){
-    if(!selectionMode||!messages.length||previous!==location.pathname+location.search)return;
+    if(!selectionMode||!messages.length)return;
     const target=e.target instanceof Element?e.target:e.target?.parentElement;
     if(!target||target.closest('#zce-panel,#zce-launch,#zce-tip'))return;
     if(target.closest('a,button,input,textarea,select,[contenteditable="true"]'))return;
@@ -761,6 +897,8 @@
     const ids=group.parts.map(m=>m.id);
     const shouldAdd=ids.some(id=>!chosen.has(id));
     ids.forEach(id=>shouldAdd?chosen.add(id):chosen.delete(id));
+    const key=responseKey(match.items);
+    responseMarks.set(key,{element:match.element,ids});
     updatePageHighlights();update();
     flashTip(`${shouldAdd?'선택 완료':'선택 해제'} · 선택 ${directSelectionLabel()} ${selectedDirectCount()}개`);
   }
@@ -988,7 +1126,6 @@
       else if(act==='copy-txt')void copyToClipboard();
       else if(act==='txt'||act==='json')download(act);
     });
-    observeChatChanges();
     applyUi();update();
   }
   let previous=location.pathname+location.search;
