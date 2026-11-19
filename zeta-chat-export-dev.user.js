@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON) (dev)
 // @namespace    zeta-chat-export-dev
-// @version      1.2.4-beta.1
+// @version      1.2.4-beta.2
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/dev/zeta-chat-export-dev.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.2.4-beta.1';
+  const VERSION = '1.2.4-beta.2';
   const frameOrigin='https://frame.pingpong.ai';
   const channel='zeta-chat-export:selection:1';
   function isChatFrameUrl(url){
@@ -618,7 +618,7 @@
   }
   function clickedMessage(event){
     const target=event.target instanceof Element?event.target:event.target?.parentElement;
-    if(!target||target.closest('#zce-panel,#zce-launch,#zce-tip,a,button,input,textarea,select,[contenteditable="true"]'))return null;
+    if(!target||target.closest('#zce-panel,#zce-launch-dev,#zce-tip,a,button,input,textarea,select,[contenteditable="true"]'))return null;
     const row=target.closest(messageRowSelector);
     return row&&messageElements(row).some(element=>element.contains(target))?messageId(row):null;
   }
@@ -693,7 +693,7 @@
   function chatHeaderBottom(){
     let bottom=0;
     for(const el of document.querySelectorAll('header,[role="banner"],nav')){
-      if(el.closest('#zce-panel,#zce-launch,#zce-highlight-layer'))continue;
+      if(el.closest('#zce-panel,#zce-launch-dev,#zce-highlight-layer'))continue;
       const rect=el.getBoundingClientRect();
       if(rect.top>12||rect.bottom<=0||rect.height>180)continue;
       const position=getComputedStyle(el).position;
@@ -716,7 +716,7 @@
     const top=Math.min(innerHeight,Math.ceil(chatHeaderBottom()+5));
     let bottom=innerHeight;
     for(const input of document.querySelectorAll('textarea,[contenteditable="true"]')){
-      if(input.closest('#zce-panel,#zce-launch,#zce-tip'))continue;
+      if(input.closest('#zce-panel,#zce-launch-dev,#zce-tip'))continue;
       const rect=input.getBoundingClientRect();
       if(rect.height>0&&rect.top>innerHeight/2&&rect.top<bottom)bottom=rect.top;
     }
@@ -775,7 +775,7 @@
     new MutationObserver(records=>{
       if((inChatFrame?frameState?.enabled:selectionMode)&&records.some(record=>{
         const element=record.target.nodeType===1?record.target:record.target.parentElement;
-        return element&&!element.closest('#zce-panel,#zce-launch,#zce-tip,#zce-highlight-layer');
+        return element&&!element.closest('#zce-panel,#zce-launch-dev,#zce-tip,#zce-highlight-layer');
       }))scheduleHighlights();
     }).observe(document.body,{childList:true,subtree:true,characterData:true,
       attributes:true,attributeFilter:['data-index','data-key','class']});
@@ -889,7 +889,7 @@
     launchLabel.textContent=selectionMode?'대화 저장 · 선택 중':'대화 저장';
     launchCount.textContent=`선택 ${directSelectionLabel()} ${selectedDirectCount()}개`;
     launchCount.hidden=!selectionMode;
-    launch.setAttribute('aria-label',selectionMode?`대화 저장, 현재 선택 ${directSelectionLabel()} ${selectedDirectCount()}개`:'대화 저장');
+    launch.setAttribute('aria-label',(selectionMode?`대화 저장, 현재 선택 ${directSelectionLabel()} ${selectedDirectCount()}개`:'대화 저장')+' (dev)');
     if(!list.hidden)renderList();
     updatePageHighlights();
   }
@@ -948,10 +948,10 @@
     if(!document.body||panel)return;
     const style=document.createElement('style');
     style.textContent=`
-      #zce-launch{position:fixed;right:12px;bottom:calc(94px + env(safe-area-inset-bottom,0px));z-index:2147483645;background:#25252d;color:white;border:1px solid #666;border-radius:22px;padding:10px 13px;font:600 13px system-ui;cursor:pointer;user-select:none;-webkit-user-select:none}
-      #zce-launch.zce-mode-on{border-color:#44c384;box-shadow:0 0 0 2px #44c38455}
-      #zce-launch .zce-selection-count{position:absolute;right:-6px;top:-12px;min-width:48px;padding:3px 7px;border-radius:16px;background:#246443;color:#fff;border:1px solid #90eac1;font:700 11px/1.25 system-ui;white-space:nowrap;pointer-events:none;box-sizing:border-box}
-      #zce-launch .zce-selection-count[hidden]{display:none!important}
+      #zce-launch-dev{position:fixed;right:12px;bottom:calc(94px + env(safe-area-inset-bottom,0px));z-index:2147483645;background:#25252d;color:white;border:1px solid #666;border-radius:22px;padding:10px 13px;font:600 13px system-ui;cursor:pointer;user-select:none;-webkit-user-select:none}
+      #zce-launch-dev.zce-mode-on{border-color:#44c384;box-shadow:0 0 0 2px #44c38455}
+      #zce-launch-dev .zce-selection-count{position:absolute;right:-6px;top:-12px;min-width:48px;padding:3px 7px;border-radius:16px;background:#246443;color:#fff;border:1px solid #90eac1;font:700 11px/1.25 system-ui;white-space:nowrap;pointer-events:none;box-sizing:border-box}
+      #zce-launch-dev .zce-selection-count[hidden]{display:none!important}
       #zce-panel{position:fixed;z-index:2147483646;right:10px;bottom:calc(145px + env(safe-area-inset-bottom,0px));width:min(360px,calc(100vw - 20px));max-height:74vh;overflow:hidden;display:flex;flex-direction:column;background:#202029;color:white;border:1px solid #555;border-radius:14px;padding:13px;font:13px/1.45 system-ui;box-sizing:border-box;box-shadow:0 7px 28px #0008;overscroll-behavior:contain}
       #zce-panel[hidden],#zce-panel [hidden],#zce-tip[hidden],#zce-selection-actions[hidden]{display:none!important}
       #zce-panel .zce-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
@@ -1006,13 +1006,13 @@
       #zce-highlight-layer{position:fixed;inset:0;z-index:2147483643;pointer-events:none;overflow:hidden;contain:layout style paint}
       #zce-highlight-layer .zce-highlight-outline{position:absolute;pointer-events:none;border:3px solid #49ce88;border-radius:19px;box-sizing:border-box;background:rgba(73,206,136,.025)}
       #zce-tip{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:#263a30;color:white;border:1px solid #6ad39b;border-radius:10px;padding:8px 12px;max-width:min(340px,calc(100vw - 20px));font:12px/1.4 system-ui;text-align:center;pointer-events:none}
-      #zce-selection-actions{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);display:flex;gap:8px;align-items:center;max-width:calc(100vw - 24px);padding:5px;background:#202029;border:1px solid #565a65;border-radius:13px;box-shadow:0 5px 20px #0009;box-sizing:border-box}
-      #zce-selection-actions button{appearance:none;-webkit-appearance:none;min-width:100px;min-height:38px;padding:8px 14px;border-radius:9px;border:1px solid #747986;background:#3b3b49;color:#fff;font:600 13px system-ui;cursor:pointer;touch-action:manipulation;white-space:nowrap}
+      #zce-selection-actions{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);display:flex;gap:6px;align-items:center;max-width:calc(100vw - 24px);padding:4px;background:#202029;border:1px solid #565a65;border-radius:13px;box-shadow:0 5px 20px #0009;box-sizing:border-box}
+      #zce-selection-actions button{appearance:none;-webkit-appearance:none;min-width:88px;min-height:34px;padding:6px 11px;border-radius:9px;border:1px solid #747986;background:#3b3b49;color:#fff;font:600 12px system-ui;cursor:pointer;touch-action:manipulation;white-space:nowrap}
       #zce-selection-actions button[data-action="finish"]{background:#387559;border-color:#6ca48a}
       .zce-select-mode #zce-tip{top:calc(77px + env(safe-area-inset-top,0px))}
     `;
     (document.head||document.documentElement).appendChild(style);
-    launch=document.createElement('button');launch.id='zce-launch';launch.type='button';
+    launch=document.createElement('button');launch.id='zce-launch-dev';launch.type='button';
     launchLabel=document.createElement('span');launchLabel.textContent='대화 저장';
     launchCount=document.createElement('span');launchCount.className='zce-selection-count';launchCount.hidden=true;
     launch.append(launchLabel,launchCount);
