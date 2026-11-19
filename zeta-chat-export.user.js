@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.2.3
+// @version      1.2.4
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.2.1';
+  const VERSION = '1.2.4';
   const frameOrigin='https://frame.pingpong.ai';
   const channel='zeta-chat-export:selection:1';
   function isChatFrameUrl(url){
@@ -38,7 +38,7 @@
   let messages = [], turns = [], chosen = new Set(), running = false, aborter = null, stopped = false;
   let groupMode='turn'; // Default: whole turns; message mode uses original API messages.
   const savedChoices={turn:new Set(),message:new Set()};
-  let selectionMode = false, previewLimit = 40, loadEpoch = 0;
+  let selectionMode = false, selectionSnapshot = null, selectionActions = null, previewLimit = 40, loadEpoch = 0;
   const expanded = new Set(), pageMarked = new Map();
   let pages = 0, totalRaw = 0, complete = false, info = '채팅방을 열고 대화 불러오기를 누르세요.';
   const originalFetch = window.fetch;
@@ -577,6 +577,34 @@
     clearTimeout(flashTip.timeout);
     flashTip.timeout=setTimeout(()=>{tip.hidden=true;},2700);
   }
+  function ensureSelectionActions(){
+    if(selectionActions?.isConnected)return selectionActions;
+    selectionActions=document.createElement('div');
+    selectionActions.id='zce-selection-actions';
+    selectionActions.hidden=true;
+    selectionActions.setAttribute('role','group');
+    selectionActions.setAttribute('aria-label','말풍선 직접 선택');
+    const finish=document.createElement('button');
+    finish.type='button';finish.textContent='선택 완료';finish.dataset.action='finish';
+    const cancel=document.createElement('button');
+    cancel.type='button';cancel.textContent='취소';cancel.dataset.action='cancel';
+    selectionActions.append(finish,cancel);
+    selectionActions.addEventListener('click',event=>{
+      const button=event.target.closest('button[data-action]');
+      if(!button||!selectionMode)return;
+      event.preventDefault();event.stopPropagation();
+      const canceled=button.dataset.action==='cancel';
+      if(canceled&&selectionSnapshot){
+        chosen.clear();
+        for(const id of selectionSnapshot)chosen.add(id);
+      }
+      setSelectionMode(false);
+      if(panel){panel.hidden=false;applyUi();}
+      flashTip(canceled?'선택을 취소하고 이전 선택 상태로 복원했습니다.':'선택을 완료했습니다.');
+    });
+    document.body.appendChild(selectionActions);
+    return selectionActions;
+  }
   function messageId(row){
     return row.getAttribute('data-key').slice('message-'.length);
   }
@@ -759,9 +787,14 @@
     return groupMode==='turn'?'턴':'메시지';
   }
   function setSelectionMode(on){
-    selectionMode=!!on;
+    const next=!!on;
+    if(next&&!selectionMode)selectionSnapshot=new Set(chosen);
+    selectionMode=next;
     document.documentElement.classList.toggle('zce-select-mode',selectionMode);
-    if(!selectionMode){
+    if(selectionMode)ensureSelectionActions().hidden=false;
+    else{
+      if(selectionActions)selectionActions.hidden=true;
+      selectionSnapshot=null;
       clearHighlightLayer();
       pageMarked.clear();
     }
@@ -920,7 +953,7 @@
       #zce-launch .zce-selection-count{position:absolute;right:-6px;top:-12px;min-width:48px;padding:3px 7px;border-radius:16px;background:#246443;color:#fff;border:1px solid #90eac1;font:700 11px/1.25 system-ui;white-space:nowrap;pointer-events:none;box-sizing:border-box}
       #zce-launch .zce-selection-count[hidden]{display:none!important}
       #zce-panel{position:fixed;z-index:2147483646;right:10px;bottom:calc(145px + env(safe-area-inset-bottom,0px));width:min(360px,calc(100vw - 20px));max-height:74vh;overflow:hidden;display:flex;flex-direction:column;background:#202029;color:white;border:1px solid #555;border-radius:14px;padding:13px;font:13px/1.45 system-ui;box-sizing:border-box;box-shadow:0 7px 28px #0008;overscroll-behavior:contain}
-      #zce-panel[hidden],#zce-panel [hidden],#zce-tip[hidden]{display:none!important}
+      #zce-panel[hidden],#zce-panel [hidden],#zce-tip[hidden],#zce-selection-actions[hidden]{display:none!important}
       #zce-panel .zce-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
       #zce-panel .zce-resize-grip{position:absolute;right:0;bottom:0;width:30px;height:30px;z-index:4;display:flex;align-items:flex-end;justify-content:flex-end;padding:5px;color:#adb4cf;font:19px/1 system-ui;cursor:nwse-resize;touch-action:none;user-select:none;-webkit-user-select:none;background:transparent;border:0;border-radius:0}
       #zce-panel *{box-sizing:border-box}
@@ -973,6 +1006,10 @@
       #zce-highlight-layer{position:fixed;inset:0;z-index:2147483643;pointer-events:none;overflow:hidden;contain:layout style paint}
       #zce-highlight-layer .zce-highlight-outline{position:absolute;pointer-events:none;border:3px solid #49ce88;border-radius:19px;box-sizing:border-box;background:rgba(73,206,136,.025)}
       #zce-tip{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);background:#263a30;color:white;border:1px solid #6ad39b;border-radius:10px;padding:8px 12px;max-width:min(340px,calc(100vw - 20px));font:12px/1.4 system-ui;text-align:center;pointer-events:none}
+      #zce-selection-actions{position:fixed;z-index:2147483647;left:50%;top:calc(18px + env(safe-area-inset-top,0px));transform:translateX(-50%);display:flex;gap:6px;align-items:center;max-width:calc(100vw - 24px);padding:4px;background:#202029;border:1px solid #565a65;border-radius:13px;box-shadow:0 5px 20px #0009;box-sizing:border-box}
+      #zce-selection-actions button{appearance:none;-webkit-appearance:none;min-width:88px;min-height:34px;padding:6px 11px;border-radius:9px;border:1px solid #747986;background:#3b3b49;color:#fff;font:600 12px system-ui;cursor:pointer;touch-action:manipulation;white-space:nowrap}
+      #zce-selection-actions button[data-action="finish"]{background:#387559;border-color:#6ca48a}
+      .zce-select-mode #zce-tip{top:calc(77px + env(safe-area-inset-top,0px))}
     `;
     (document.head||document.documentElement).appendChild(style);
     launch=document.createElement('button');launch.id='zce-launch';launch.type='button';
