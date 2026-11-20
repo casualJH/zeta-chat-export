@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 대화 내보내기 (TXT/JSON)
 // @namespace    zeta-chat-export
-// @version      1.2.4
+// @version      1.2.5
 // @updateURL    https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/casualJH/zeta-chat-export/main/zeta-chat-export.user.js
 // @homepageURL  https://github.com/casualJH/zeta-chat-export
@@ -16,7 +16,7 @@
   'use strict';
   if (window.__zetaChatExport011) return;
   window.__zetaChatExport011 = true;
-  const VERSION = '1.2.4';
+  const VERSION = '1.2.5';
   const frameOrigin='https://frame.pingpong.ai';
   const channel='zeta-chat-export:selection:1';
   function isChatFrameUrl(url){
@@ -137,7 +137,8 @@
           kind='info_box';
         } else continue;
         out.push({id:String(msg.id||'')+':'+(i++),messageId:msg.id||null,
-          time:msg.messageTime||null,speaker,role:isUser?'user':'character',text,kind});
+          time:msg.messageTime||null,speaker,role:isUser?'user':'character',text,kind,
+          isIntro:msg.isIntro===true});
       }
     }
     out.sort((a,b)=>{const x=Date.parse(a.time)||0,y=Date.parse(b.time)||0;return x-y;});
@@ -192,27 +193,23 @@
       update();
     }
   }
-  // The opening scene (all CHARACTER responses before the first USER) is
-  // always exactly one introductory turn. Once the first USER appears, each
-  // independent CHARACTER message completes a new turn; consecutive USER
-  // messages belong to the next CHARACTER. Trailing USER input is incomplete.
-  // A message's multiple contents, including narrator/character speech,
-  // remain one response because they share messageId.
+  // Only API-confirmed intro messages form the shared intro group.
+  // Never infer intro status from the first USER or chronological position.
+  // Preserve every original message part and its messageId for export and DOM mapping.
   function buildTurns(parts){
     const result=[], pendingUsers=[];
-    const firstUserIndex=parts.findIndex(p=>p.role==='user');
-    const introEnd=firstUserIndex<0?parts.length:firstUserIndex;
-    if(introEnd>0){
-      const opening=parts.slice(0,introEnd);
-      const first=opening[0];
+    const introParts=parts.filter(part=>part.isIntro===true);
+    if(introParts.length){
+      const first=introParts[0];
       result.push({
         id:'opening-'+String(first.messageId||first.id),
         unpaired:true,incomplete:false,isIntro:true,
-        parts:opening,user:[],character:opening.slice()
+        parts:introParts,user:[],character:introParts.slice()
       });
     }
     let current=null,lastId=null;
-    for(const part of parts.slice(introEnd)){
+    for(const part of parts){
+      if(part.isIntro===true)continue;
       const id=String(part.messageId||part.id);
       if(part.role==='user'){
         pendingUsers.push(part);
@@ -245,7 +242,13 @@
   function displayGroups(){
     if(groupMode==='turn')return turns.map(t=>({id:t.id,parts:t.parts,label:(t.incomplete?'미완성 턴':t.isIntro?'인트로':'턴')}));
     const groups=[],byId=new Map();
+    const introParts=messages.filter(part=>part.isIntro===true);
+    if(introParts.length){
+      const group={id:'intro-'+String(introParts[0].messageId||introParts[0].id),parts:introParts,label:'인트로',isIntro:true};
+      groups.push(group);
+    }
     for(const part of messages){
+      if(part.isIntro===true)continue;
       const id=String(part.messageId||part.id);
       if(!byId.has(id)){const g={id,parts:[],label:'메시지'};groups.push(g);byId.set(id,g);}
       byId.get(id).parts.push(part);
@@ -906,7 +909,7 @@
       card.setAttribute('aria-checked',selected?'true':partially?'mixed':'false');
       if(partially)card.classList.add('zce-is-chosen');
       const head=document.createElement('div');head.className='zce-card-head';
-      const who=document.createElement('span');who.textContent=`${i+1}${groupMode==='turn'?'턴':'.'}${groupMode==='turn'?' · ': ' '}${groupMode==='turn'?(turns[i]?.isIntro?'인트로':turns[i]?.incomplete?'미완성 · 사용자':turns[i]?.user.length?'사용자 + 캐릭터':'캐릭터 응답'):(group.parts[0]?.speaker||'메시지')}`;
+      const who=document.createElement('span');who.textContent=`${i+1}${groupMode==='turn'?'턴':'.'}${groupMode==='turn'?' · ': ' '}${groupMode==='turn'?(turns[i]?.isIntro?'인트로':turns[i]?.incomplete?'미완성 · 사용자':turns[i]?.user.length?'사용자 + 캐릭터':'캐릭터 응답'):(group.isIntro?'인트로':(group.parts[0]?.speaker||'메시지'))}`;
       const check=document.createElement('span');check.textContent=selected?'✓ 선택됨':partially?'◐ 일부 선택':'＋ 선택';
       head.append(who,check);card.appendChild(head);
       const body=document.createElement('div');body.className='zce-card-text';
